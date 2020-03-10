@@ -1,76 +1,77 @@
-var/list/clients = list()							//list of all clients
-var/list/admins = list()							//list of all clients whom are admins
-var/list/directory = list()							//list of all ckeys with associated client
-
-//Since it didn't really belong in any other category, I'm putting this here
-//This is for procs to replace all the goddamn 'in world's that are chilling around the code
-
-var/global/list/player_list = list()				//List of all mobs **with clients attached**. Excludes /mob/new_player
-var/global/list/mob_list = list()					//List of all mobs, including clientless
-var/global/list/living_mob_list = list()			//List of all alive mobs, including clientless. Excludes /mob/new_player
-var/global/list/dead_mob_list = list()				//List of all dead mobs, including clientless. Excludes /mob/new_player
-
-var/global/list/cable_list = list()					//Index for all cables, so that powernets don't have to look through the entire world all the time
-var/global/list/chemical_reactions_list				//list of all /datum/chemical_reaction datums. Used during chemical reactions
-var/global/list/chemical_reagents_list				//list of all /datum/reagent datums indexed by reagent id. Used by chemistry stuff
-var/global/list/landmarks_list = list()				//list of all landmarks created
-var/global/list/surgeries_list = list()				//list of all surgeries by name, associated with their path.
-var/global/list/mechas_list = list()				//list of all mechs. Used by hostile mobs target tracking.
-var/global/list/shuttle_caller_list = list()  		//list of all communication consoles and AIs, for automatic shuttle calls when there are none.
-
-var/global/list/portals = list()					//for use by portals
-
-//Preferences stuff
-	//Hairstyles
-var/global/list/hair_styles_list = list()			//stores /datum/sprite_accessory/hair indexed by name
-var/global/list/hair_styles_male_list = list()		//stores only hair names
-var/global/list/hair_styles_female_list = list()	//stores only hair names
-var/global/list/facial_hair_styles_list = list()	//stores /datum/sprite_accessory/facial_hair indexed by name
-var/global/list/facial_hair_styles_male_list = list()	//stores only hair names
-var/global/list/facial_hair_styles_female_list = list()	//stores only hair names
-	//Underwear
-var/global/list/underwear_all = list()		//stores /datum/sprite_accessory/underwear indexed by name
-var/global/list/underwear_m = list()	//stores only underwear name
-var/global/list/underwear_f = list()	//stores only underwear name
-	//Backpacks
-var/global/list/backbaglist = list("Nothing", "Backpack", "Satchel")
-
 //////////////////////////
 /////Initial Building/////
 //////////////////////////
 
 /proc/make_datum_references_lists()
 	//hair
-	init_sprite_accessory_subtypes(/datum/sprite_accessory/hair, hair_styles_list, hair_styles_male_list, hair_styles_female_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/hair, GLOB.hairstyles_list, GLOB.hairstyles_male_list, GLOB.hairstyles_female_list)
 	//facial hair
-	init_sprite_accessory_subtypes(/datum/sprite_accessory/facial_hair, facial_hair_styles_list, facial_hair_styles_male_list, facial_hair_styles_female_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/facial_hair, GLOB.facial_hairstyles_list, GLOB.facial_hairstyles_male_list, GLOB.facial_hairstyles_female_list)
 	//underwear
-	init_sprite_accessory_subtypes(/datum/sprite_accessory/underwear, underwear_all, underwear_m, underwear_f)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/underwear, GLOB.underwear_list, GLOB.underwear_m, GLOB.underwear_f)
+	//undershirt
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/undershirt, GLOB.undershirt_list, GLOB.undershirt_m, GLOB.undershirt_f)
+	//socks
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/socks, GLOB.socks_list)
+	//bodypart accessories (blizzard intensifies)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/body_markings, GLOB.body_markings_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/tails/lizard, GLOB.tails_list_lizard)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/tails_animated/lizard, GLOB.animated_tails_list_lizard)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/tails/human, GLOB.tails_list_human)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/tails_animated/human, GLOB.animated_tails_list_human)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/snouts, GLOB.snouts_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/horns,GLOB.horns_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/ears, GLOB.ears_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/wings, GLOB.wings_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/wings_open, GLOB.wings_open_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/frills, GLOB.frills_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/spines, GLOB.spines_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/spines_animated, GLOB.animated_spines_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/legs, GLOB.legs_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/wings, GLOB.r_wings_list,roundstart = TRUE)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/caps, GLOB.caps_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/moth_wings, GLOB.moth_wings_list)
+	init_sprite_accessory_subtypes(/datum/sprite_accessory/moth_markings, GLOB.moth_markings_list)
+
+	//Species
+	for(var/spath in subtypesof(/datum/species))
+		var/datum/species/S = new spath()
+		GLOB.species_list[S.id] = spath
+	sortList(GLOB.species_list, /proc/cmp_typepaths_asc)
 
 	//Surgeries
-	for(var/path in typesof(/datum/surgery))
-		if(path == /datum/surgery)
-			continue
-		var/datum/surgery/S = new path()
-		surgeries_list[S.name] = S
+	for(var/path in subtypesof(/datum/surgery))
+		GLOB.surgeries_list += new path()
+	sortList(GLOB.surgeries_list, /proc/cmp_typepaths_asc)
 
-/* // Uncomment to debug chemical reaction list.
-/client/verb/debug_chemical_list()
+	//Materials
+	for(var/path in subtypesof(/datum/material))
+		var/datum/material/D = new path()
+		GLOB.materials_list[D.id] = D
+	sortList(GLOB.materials_list, /proc/cmp_typepaths_asc)
 
-	for (var/reaction in chemical_reactions_list)
-		. += "chemical_reactions_list\[\"[reaction]\"\] = \"[chemical_reactions_list[reaction]]\"\n"
-		if(islist(chemical_reactions_list[reaction]))
-			var/list/L = chemical_reactions_list[reaction]
-			for(var/t in L)
-				. += "    has: [t]\n"
-	world << .
-*/
+	// Keybindings
+	init_keybindings()
+
+	GLOB.emote_list = init_emote_list()
+
+	init_subtypes(/datum/crafting_recipe, GLOB.crafting_recipes)
 
 //creates every subtype of prototype (excluding prototype) and adds it to list L.
 //if no list/L is provided, one is created.
 /proc/init_subtypes(prototype, list/L)
-	if(!istype(L))	L = list()
-	for(var/path in typesof(prototype))
-		if(path == prototype)	continue
+	if(!istype(L))
+		L = list()
+	for(var/path in subtypesof(prototype))
 		L += new path()
 	return L
+
+//returns a list of paths to every subtype of prototype (excluding prototype)
+//if no list/L is provided, one is created.
+/proc/init_paths(prototype, list/L)
+	if(!istype(L))
+		L = list()
+		for(var/path in subtypesof(prototype))
+			L+= path
+		return L
+

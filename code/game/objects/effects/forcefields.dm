@@ -1,38 +1,38 @@
 /obj/effect/forcefield
 	desc = "A space wizard's magic wall."
 	name = "FORCEWALL"
-	icon = 'icons/effects/effects.dmi'
 	icon_state = "m_shield"
-	anchored = 1.0
+	anchored = TRUE
 	opacity = 0
-	density = 1
-	unacidable = 1
+	density = TRUE
+	CanAtmosPass = ATMOS_PASS_DENSITY
+	var/timeleft = 300 //Set to 0 for permanent forcefields (ugh)
 
+/obj/effect/forcefield/Initialize()
+	. = ..()
+	if(timeleft)
+		QDEL_IN(src, timeleft)
 
-	bullet_act(var/obj/item/projectile/Proj, var/def_zone)
-		var/turf/T = get_turf(src.loc)
-		if(T)
-			for(var/mob/M in T)
-				Proj.on_hit(M,M.bullet_act(Proj, def_zone))
-		return
+/obj/effect/forcefield/singularity_pull()
+	return
 
+/obj/effect/forcefield/cult
+	desc = "An unholy shield that blocks all attacks."
+	name = "glowing wall"
+	icon = 'icons/effects/cult_effects.dmi'
+	icon_state = "cultshield"
+	CanAtmosPass = ATMOS_PASS_NO
+	timeleft = 200
 
 ///////////Mimewalls///////////
 
 /obj/effect/forcefield/mime
-	icon_state = "empty"
+	icon_state = "nothing"
 	name = "invisible wall"
 	desc = "You have a bad feeling about this."
-	var/timeleft = 300
-	var/last_process = 0
+	alpha = 0
 
-/obj/effect/forcefield/mime/New()
-	..()
-	last_process = world.time
-	processing_objects.Add(src)
-
-/obj/effect/forcefield/mime/process()
-	timeleft -= (world.time - last_process)
-	if(timeleft <= 0)
-		processing_objects.Remove(src)
-		del(src)
+/obj/effect/forcefield/mime/advanced
+	name = "invisible blockade"
+	desc = "You're gonna be here awhile."
+	timeleft = 600

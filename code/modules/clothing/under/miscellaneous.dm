@@ -1,245 +1,158 @@
-/obj/item/clothing/under/pj/red
-	name = "red pj's"
-	desc = "Sleepwear."
+/obj/item/clothing/under/misc
+	icon = 'icons/obj/clothing/under/misc.dmi'
+	mob_overlay_icon = 'icons/mob/clothing/under/misc.dmi'
+
+/obj/item/clothing/under/misc/pj
+	name = "\improper PJs"
+	desc = "A comfy set of sleepwear, for taking naps or being lazy instead of working."
+	can_adjust = FALSE
+	item_state = "w_suit"
+
+/obj/item/clothing/under/misc/pj/red
 	icon_state = "red_pyjamas"
-	color = "red_pyjamas"
-	item_state = "w_suit"
 
-/obj/item/clothing/under/pj/blue
-	name = "blue pj's"
-	desc = "Sleepwear."
+/obj/item/clothing/under/misc/pj/blue
 	icon_state = "blue_pyjamas"
-	color = "blue_pyjamas"
-	item_state = "w_suit"
 
-/obj/item/clothing/under/scratch
-	name = "white suit"
-	desc = "A white suit, suitable for an excellent host"
-	icon_state = "scratch"
-	item_state = "scratch"
-	color = "scratch"
+/obj/item/clothing/under/misc/patriotsuit
+	name = "Patriotic Suit"
+	desc = "Motorcycle not included."
+	icon_state = "ek"
+	item_state = "ek"
+	can_adjust = FALSE
 
-/obj/item/clothing/under/sl_suit
-	desc = "It's a very amish looking suit."
-	name = "amish suit"
-	icon_state = "sl_suit"
-	color = "sl_suit"
-	flags = FPRINT | TABLEPASS | ONESIZEFITSALL
-
-/obj/item/clothing/under/waiter
-	name = "waiter's outfit"
-	desc = "It's a very smart uniform with a special pocket for tip."
-	icon_state = "waiter"
-	item_state = "waiter"
-	color = "waiter"
-	flags = FPRINT | TABLEPASS | ONESIZEFITSALL
-
-/obj/item/clothing/under/rank/mailman
+/obj/item/clothing/under/misc/mailman
 	name = "mailman's jumpsuit"
 	desc = "<i>'Special delivery!'</i>"
 	icon_state = "mailman"
 	item_state = "b_suit"
-	color = "mailman"
 
-/obj/item/clothing/under/sexyclown
-	name = "sexy-clown suit"
-	desc = "It makes you look HONKable!"
-	icon_state = "sexyclown"
-	item_state = "sexyclown"
-	color = "sexyclown"
+/obj/item/clothing/under/misc/psyche
+	name = "psychedelic jumpsuit"
+	desc = "Groovy!"
+	icon_state = "psyche"
+	item_state = "p_suit"
 
-/obj/item/clothing/under/rank/vice
+/obj/item/clothing/under/misc/vice_officer
 	name = "vice officer's jumpsuit"
 	desc = "It's the standard issue pretty-boy outfit, as seen on Holo-Vision."
 	icon_state = "vice"
 	item_state = "gy_suit"
-	color = "vice"
+	can_adjust = FALSE
 
-/obj/item/clothing/under/rank/centcom_officer
-	desc = "It's a jumpsuit worn by CentCom Officers."
-	name = "\improper CentCom officer's jumpsuit"
-	icon_state = "officer"
-	item_state = "g_suit"
-	color = "officer"
-
-/obj/item/clothing/under/rank/centcom_commander
-	desc = "It's a jumpsuit worn by CentCom's highest-tier Commanders."
-	name = "\improper CentCom officer's jumpsuit"
-	icon_state = "centcom"
-	item_state = "dg_suit"
-	color = "centcom"
-
-/obj/item/clothing/under/space
-	name = "\improper NASA jumpsuit"
-	desc = "It has a NASA logo on it and is made of space-proofed materials."
-	icon_state = "black"
-	item_state = "bl_suit"
-	color = "black"
-	w_class = 4//bulky item
-	gas_transfer_coefficient = 0.01
-	permeability_coefficient = 0.02
-	flags = FPRINT | TABLEPASS
-	body_parts_covered = CHEST|GROIN|LEGS|FEET|ARMS|HANDS
-	cold_protection = CHEST | GROIN | LEGS | ARMS //Needs gloves and shoes with cold protection to be fully protected.
-	min_cold_protection_temperature = SPACE_SUIT_MIN_TEMP_PROTECT
-	heat_protection = CHEST|GROIN|LEGS|FEET|ARMS|HANDS
-	max_heat_protection_temperature = SPACE_SUIT_MAX_TEMP_PROTECT
-
-/obj/item/clothing/under/acj
+/obj/item/clothing/under/misc/adminsuit
 	name = "administrative cybernetic jumpsuit"
+	icon = 'icons/obj/clothing/under/syndicate.dmi'
 	icon_state = "syndicate"
 	item_state = "bl_suit"
-	color = "syndicate"
-	desc = "it's a cybernetically enhanced jumpsuit used for administrative duties."
+	mob_overlay_icon = 'icons/mob/clothing/under/syndicate.dmi'
+	desc = "A cybernetically enhanced jumpsuit used for administrative duties."
 	gas_transfer_coefficient = 0.01
 	permeability_coefficient = 0.01
-	flags = FPRINT | TABLEPASS
 	body_parts_covered = CHEST|GROIN|LEGS|FEET|ARMS|HANDS
-	armor = list(melee = 100, bullet = 100, laser = 100,energy = 100, bomb = 100, bio = 100, rad = 100)
+	armor = list("melee" = 100, "bullet" = 100, "laser" = 100,"energy" = 100, "bomb" = 100, "bio" = 100, "rad" = 100, "fire" = 100, "acid" = 100)
 	cold_protection = CHEST | GROIN | LEGS | FEET | ARMS | HANDS
 	min_cold_protection_temperature = SPACE_SUIT_MIN_TEMP_PROTECT
 	heat_protection = CHEST|GROIN|LEGS|FEET|ARMS|HANDS
 	max_heat_protection_temperature = SPACE_SUIT_MAX_TEMP_PROTECT
+	can_adjust = FALSE
+	resistance_flags = FIRE_PROOF | ACID_PROOF
 
-/obj/item/clothing/under/owl
-	name = "owl uniform"
-	desc = "A jumpsuit with owl wings. Photorealistic owl feathers! Twooooo!"
-	icon_state = "owl"
-	color = "owl"
-	flags = FPRINT | TABLEPASS | ONESIZEFITSALL
+/obj/item/clothing/under/misc/burial
+	name = "burial garments"
+	desc = "Traditional burial garments from the early 22nd century."
+	icon_state = "burial"
+	item_state = "burial"
+	can_adjust = FALSE
+	has_sensor = NO_SENSORS
 
-/obj/item/clothing/under/johnny
-	name = "johnny~~ jumpsuit"
-	desc = "Johnny~~"
-	icon_state = "johnny"
-	color = "johnny"
-
-/obj/item/clothing/under/rainbow
-	name = "rainbow"
-	desc = "rainbow"
-	icon_state = "rainbow"
-	item_state = "rainbow"
-	color = "rainbow"
-
-/obj/item/clothing/under/cloud
-	name = "cloud"
-	desc = "cloud"
-	icon_state = "cloud"
-	color = "cloud"
-
-/obj/item/clothing/under/gimmick/rank/captain/suit
-	name = "captain's suit"
-	desc = "A green suit and yellow necktie. Exemplifies authority."
-	icon_state = "green_suit"
-	item_state = "dg_suit"
-	color = "green_suit"
-
-/obj/item/clothing/under/gimmick/rank/head_of_personnel/suit
-	name = "head of personnel's suit"
-	desc = "A teal suit and yellow necktie. An authoritative yet tacky ensemble."
-	icon_state = "teal_suit"
-	item_state = "g_suit"
-	color = "teal_suit"
-
-/obj/item/clothing/under/suit_jacket
-	name = "black suit"
-	desc = "A black suit and red tie. Very formal."
-	icon_state = "black_suit"
-	item_state = "bl_suit"
-	color = "black_suit"
-
-/obj/item/clothing/under/suit_jacket/really_black
-	name = "executive suit"
-	desc = "A formal black suit and red tie, intended for the station's finest."
-	icon_state = "really_black_suit"
-	item_state = "bl_suit"
-	color = "black_suit"
-
-/obj/item/clothing/under/suit_jacket/female
-	name = "executive suit"
-	desc = "A formal trouser suit for women, intended for the station's finest."
-	icon_state = "black_suit_fem"
-	item_state = "black_suit_fem"
-	color = "black_suit_fem"
-
-/obj/item/clothing/under/suit_jacket/red
-	name = "red suit"
-	desc = "A red suit and blue tie. Somewhat formal."
-	icon_state = "red_suit"
-	item_state = "r_suit"
-	color = "red_suit"
-
-/obj/item/clothing/under/blackskirt
-	name = "black skirt"
-	desc = "A black skirt, very fancy!"
-	icon_state = "blackskirt"
-	color = "blackskirt"
-	body_parts_covered = CHEST|GROIN|ARMS
-
-/obj/item/clothing/under/schoolgirl
-	name = "schoolgirl uniform"
-	desc = "It's just like one of my Japanese animes!"
-	icon_state = "schoolgirl"
-	item_state = "schoolgirl"
-	color = "schoolgirl"
-	body_parts_covered = CHEST|GROIN|ARMS
-
-/obj/item/clothing/under/overalls
+/obj/item/clothing/under/misc/overalls
 	name = "laborer's overalls"
 	desc = "A set of durable overalls for getting the job done."
 	icon_state = "overalls"
 	item_state = "lb_suit"
-	color = "overalls"
+	can_adjust = FALSE
+	custom_price = 60
 
-/obj/item/clothing/under/pirate
-	name = "pirate outfit"
-	desc = "Yarr."
-	icon_state = "pirate"
-	item_state = "pirate"
-	color = "pirate"
+/obj/item/clothing/under/misc/assistantformal
+	name = "assistant's formal uniform"
+	desc = "An assistant's formal-wear. Why an assistant needs formal-wear is still unknown."
+	icon_state = "assistant_formal"
+	item_state = "gy_suit"
+	can_adjust = FALSE
 
-/obj/item/clothing/under/soviet
-	name = "soviet uniform"
-	desc = "For the Motherland!"
-	icon_state = "soviet"
-	item_state = "soviet"
-	color = "soviet"
+/obj/item/clothing/under/plasmaman
+	name = "plasma envirosuit"
+	desc = "A special containment suit that allows plasma-based lifeforms to exist safely in an oxygenated environment, and automatically extinguishes them in a crisis. Despite being airtight, it's not spaceworthy."
+	icon_state = "plasmaman"
+	item_state = "plasmaman"
+	icon = 'icons/obj/clothing/under/plasmaman.dmi'
+	mob_overlay_icon = 'icons/mob/clothing/under/plasmaman.dmi'
+	armor = list("melee" = 0, "bullet" = 0, "laser" = 0, "energy" = 0, "bomb" = 0, "bio" = 100, "rad" = 0, "fire" = 95, "acid" = 95)
+	body_parts_covered = CHEST|GROIN|LEGS|FEET|ARMS|HANDS
+	can_adjust = FALSE
+	strip_delay = 80
+	var/next_extinguish = 0
+	var/extinguish_cooldown = 100
+	var/extinguishes_left = 5
 
-/obj/item/clothing/under/redcoat
-	name = "redcoat uniform"
-	desc = "Looks old."
-	icon_state = "redcoat"
-	item_state = "redcoat"
-	color = "redcoat"
 
-/obj/item/clothing/under/kilt
-	name = "kilt"
-	desc = "Includes shoes and plaid"
-	icon_state = "kilt"
-	item_state = "kilt"
-	color = "kilt"
-	body_parts_covered = CHEST|GROIN|FEET
+/obj/item/clothing/under/plasmaman/examine(mob/user)
+	. = ..()
+	. += "<span class='notice'>There are [extinguishes_left] extinguisher charges left in this suit.</span>"
 
-/obj/item/clothing/under/sexymime
-	name = "sexy mime outfit"
-	desc = "The only time when you DON'T enjoy looking at someone's rack."
-	icon_state = "sexymime"
-	item_state = "sexymime"
-	color = "sexymime"
-	body_parts_covered = CHEST|GROIN|LEGS
+/obj/item/clothing/under/plasmaman/proc/Extinguish(mob/living/carbon/human/H)
+	if(!istype(H))
+		return
 
-/obj/item/clothing/under/gladiator
-	name = "gladiator uniform"
-	desc = "Are you not entertained? Is that not why you are here?"
-	icon_state = "gladiator"
-	item_state = "gladiator"
-	color = "gladiator"
-	body_parts_covered = CHEST|GROIN|ARMS
+	if(H.on_fire)
+		if(extinguishes_left)
+			if(next_extinguish > world.time)
+				return
+			next_extinguish = world.time + extinguish_cooldown
+			extinguishes_left--
+			H.visible_message("<span class='warning'>[H]'s suit automatically extinguishes [H.p_them()]!</span>","<span class='warning'>Your suit automatically extinguishes you.</span>")
+			H.ExtinguishMob()
+			new /obj/effect/particle_effect/water(get_turf(H))
+	return 0
 
-/obj/item/clothing/under/sundress
-	name = "sundress"
-	desc = "Makes you want to frolic in a field of daisies."
-	icon_state = "sundress"
-	item_state = "sundress"
-	color = "sundress"
-	body_parts_covered = CHEST|GROIN
+/obj/item/clothing/under/plasmaman/attackby(obj/item/E, mob/user, params)
+	..()
+	if (istype(E, /obj/item/extinguisher_refill))
+		if (extinguishes_left == 5)
+			to_chat(user, "<span class='notice'>The inbuilt extinguisher is full.</span>")
+		else
+			extinguishes_left = 5
+			to_chat(user, "<span class='notice'>You refill the suit's built-in extinguisher, using up the cartridge.</span>")
+			qdel(E)
+
+/obj/item/extinguisher_refill
+	name = "envirosuit extinguisher cartridge"
+	desc = "A cartridge loaded with a compressed extinguisher mix, used to refill the automatic extinguisher on plasma envirosuits."
+	icon_state = "plasmarefill"
+	icon = 'icons/obj/device.dmi'
+
+/obj/item/clothing/under/misc/durathread
+	name = "durathread jumpsuit"
+	desc = "A jumpsuit made from durathread, its resilient fibres provide some protection to the wearer."
+	icon_state = "durathread"
+	item_state = "durathread"
+	can_adjust = FALSE
+	armor = list("melee" = 10, "laser" = 10, "fire" = 40, "acid" = 10, "bomb" = 5)
+
+/obj/item/clothing/under/misc/bouncer
+	name = "bouncer uniform"
+	desc = "A uniform made from a little bit more resistant fibers, makes you seem like a cool guy."
+	icon_state = "bouncer"
+	item_state = "bouncer"
+	can_adjust = FALSE
+	armor = list("melee" = 5, "bullet" = 0, "laser" = 0,"energy" = 0, "bomb" = 0, "bio" = 0, "rad" = 0, "fire" = 30, "acid" = 30)
+
+/obj/item/clothing/under/misc/coordinator
+	name = "coordinator jumpsuit"
+	desc = "A jumpsuit made by party people, from party people, for party people."
+	icon = 'icons/obj/clothing/under/captain.dmi'
+	mob_overlay_icon = 'icons/mob/clothing/under/captain.dmi'
+	icon_state = "captain_parade"
+	item_state = "by_suit"
+	can_adjust = FALSE

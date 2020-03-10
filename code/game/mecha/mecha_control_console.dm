@@ -1,131 +1,163 @@
 /obj/machinery/computer/mecha
-	name = "Exosuit Control"
-	icon = 'icons/obj/computer.dmi'
-	icon_state = "mecha"
-	req_access = list(access_robotics)
-	circuit = "/obj/item/weapon/circuitboard/mecha_control"
-	var/list/located = list()
-	var/screen = 0
-	var/stored_data
+	name = "exosuit control console"
+	desc = "Used to remotely locate or lockdown exosuits."
+	icon_screen = "mecha"
+	icon_keyboard = "tech_key"
+	req_access = list(ACCESS_ROBOTICS)
+	circuit = /obj/item/circuitboard/computer/mecha_control
+	ui_x = 500
+	ui_y = 500
 
-	attack_ai(var/mob/user as mob)
-		return src.attack_hand(user)
+/obj/machinery/computer/mecha/ui_interact(mob/user, ui_key = "main", datum/tgui/ui = null, force_open = FALSE, \
+									datum/tgui/master_ui = null, datum/ui_state/state = GLOB.default_state)
+	ui = SStgui.try_update_ui(user, src, ui_key, ui, force_open)
+	if(!ui)
+		ui = new(user, src, ui_key, "exosuit_control_console", name, ui_x, ui_y, master_ui, state)
+		ui.open()
 
-	attack_paw(var/mob/user as mob)
-		return src.attack_hand(user)
+/obj/machinery/computer/mecha/ui_data(mob/user)
+	var/list/data = list()
 
-	attack_hand(var/mob/user as mob)
-		if(..())
-			return
-		user.set_machine(src)
-		var/dat = "<html><head><title>[src.name]</title><style>h3 {margin: 0px; padding: 0px;}</style></head><body>"
-		if(screen == 0)
-			dat += "<h3>Tracking beacons data</h3>"
-			for(var/obj/item/mecha_parts/mecha_tracking/TR in world)
-				var/answer = TR.get_mecha_info()
-				if(answer)
-					dat += {"<hr>[answer]<br/>
-							  <a href='?src=\ref[src];send_message=\ref[TR]'>Send message</a><br/>
-							  <a href='?src=\ref[src];get_log=\ref[TR]'>Show exosuit log</a> | <a style='color: #f00;' href='?src=\ref[src];shock=\ref[TR]'>(EMP pulse)</a><br>"}
+	var/list/trackerlist = list()
+	for(var/obj/mecha/MC in GLOB.mechas_list)
+		trackerlist += MC.trackers
 
-		if(screen==1)
-			dat += "<h3>Log contents</h3>"
-			dat += "<a href='?src=\ref[src];return=1'>Return</a><hr>"
-			dat += "[stored_data]"
+	data["mechs"] = list()
+	for(var/obj/item/mecha_parts/mecha_tracking/MT in trackerlist)
+		if(!MT.chassis)
+			continue
+		var/obj/mecha/M = MT.chassis
+		var/list/mech_data = list(
+			name = M.name,
+			integrity = round((M.obj_integrity / M.max_integrity) * 100),
+			charge = M.cell ? round(M.cell.percent()) : null,
+			airtank = M.internal_tank ? M.return_pressure() : null,
+			pilot = M.occupant,
+			location = get_area_name(M, TRUE),
+			active_equipment = M.selected,
+			emp_recharging = MT.recharging,
+			tracker_ref = REF(MT)
+		)
+		if(istype(M, /obj/mecha/working/ripley))
+			var/obj/mecha/working/ripley/RM = M
+			mech_data += list(
+				cargo_space = round((RM.cargo.len / RM.cargo_capacity) * 100)
+		)
 
-		dat += "<A href='?src=\ref[src];refresh=1'>(Refresh)</A><BR>"
-		dat += "</body></html>"
+		data["mechs"] += list(mech_data)
 
-		user << browse(dat, "window=computer;size=400x500")
-		onclose(user, "computer")
+	return data
+
+/obj/machinery/computer/mecha/ui_act(action, params)
+	if(..())
 		return
 
-	Topic(href, href_list)
-		if(..())
-			return
-		var/datum/topic_input/filter = new /datum/topic_input(href,href_list)
-		if(href_list["send_message"])
-			var/obj/item/mecha_parts/mecha_tracking/MT = filter.getObj("send_message")
-			var/message = strip_html_simple(input(usr,"Input message","Transmit message") as text)
-			var/obj/mecha/M = MT.in_mecha()
+	switch(action)
+		if("send_message")
+			var/obj/item/mecha_parts/mecha_tracking/MT = locate(params["tracker_ref"])
+			if(!istype(MT))
+				return
+			var/message = stripped_input(usr, "Input message", "Transmit message")
+			var/obj/mecha/M = MT.chassis
 			if(trim(message) && M)
 				M.occupant_message(message)
-			return
-		if(href_list["shock"])
-			var/obj/item/mecha_parts/mecha_tracking/MT = filter.getObj("shock")
-			MT.shock()
-		if(href_list["get_log"])
-			var/obj/item/mecha_parts/mecha_tracking/MT = filter.getObj("get_log")
-			stored_data = MT.get_mecha_log()
-			screen = 1
-		if(href_list["return"])
-			screen = 0
-		src.updateUsrDialog()
-		return
-
-
+				to_chat(usr, "<span class='notice'>Message sent.</span>")
+				. = TRUE
+		if("shock")
+			var/obj/item/mecha_parts/mecha_tracking/MT = locate(params["tracker_ref"])
+			if(!istype(MT))
+				return
+			var/obj/mecha/M = MT.chassis
+			if(M)
+				MT.shock()
+				log_game("[key_name(usr)] has activated remote EMP on exosuit [M], located at [loc_name(M)], which is currently [M.occupant? "being piloted by [key_name(M.occupant)]." : "without a pilot."] ")
+				message_admins("[key_name_admin(usr)][ADMIN_FLW(usr)] has activated remote EMP on exosuit [M][ADMIN_JMP(M)], which is currently [M.occupant ? "being piloted by [key_name_admin(M.occupant)][ADMIN_FLW(M.occupant)]." : "without a pilot."] ")
+				. = TRUE
 
 /obj/item/mecha_parts/mecha_tracking
-	name = "Exosuit tracking beacon"
+	name = "exosuit tracking beacon"
 	desc = "Device used to transmit exosuit data."
 	icon = 'icons/obj/device.dmi'
 	icon_state = "motion2"
-	origin_tech = "programming=2;magnets=2"
-	construction_time = 50
-	construction_cost = list("metal"=500)
+	w_class = WEIGHT_CLASS_SMALL
+	/// If this beacon allows for AI control. Exists to avoid using istype() on checking
+	var/ai_beacon = FALSE
+	/// Cooldown variable for EMP pulsing
+	var/recharging = FALSE
+	/// The Mecha that this tracking beacon is attached to
+	var/obj/mecha/chassis
 
-	proc/get_mecha_info()
-		if(!in_mecha())
-			return 0
-		var/obj/mecha/M = src.loc
-		var/cell_charge = M.get_charge()
-		var/answer = {"<b>Name:</b> [M.name]<br>
-							<b>Integrity:</b> [M.health/initial(M.health)*100]%<br>
-							<b>Cell charge:</b> [isnull(cell_charge)?"Not found":"[M.cell.percent()]%"]<br>
-							<b>Airtank:</b> [M.return_pressure()]kPa<br>
-							<b>Pilot:</b> [M.occupant||"None"]<br>
-							<b>Location:</b> [get_area(M)||"Unknown"]<br>
-							<b>Active equipment:</b> [M.selected||"None"]"}
-		if(istype(M, /obj/mecha/working/ripley))
-			var/obj/mecha/working/ripley/RM = M
-			answer += "<b>Used cargo space:</b> [RM.cargo.len/RM.cargo_capacity*100]%<br>"
+/**
+  * Returns a html formatted string describing attached mech status
+  */
+/obj/item/mecha_parts/mecha_tracking/proc/get_mecha_info()
+	if(!chassis)
+		return FALSE
 
-		return answer
+	var/cell_charge = chassis.get_charge()
+	var/answer = {"<b>Name:</b> [chassis.name]<br>
+				<b>Integrity:</b> [round((chassis.obj_integrity/chassis.max_integrity * 100), 0.01)]%<br>
+				<b>Cell Charge:</b> [isnull(cell_charge) ? "Not Found":"[chassis.cell.percent()]%"]<br>
+				<b>Airtank:</b> [chassis.internal_tank ? "[round(chassis.return_pressure(), 0.01)]" : "Not Equipped"] kPa<br>
+				<b>Pilot:</b> [chassis.occupant || "None"]<br>
+				<b>Location:</b> [get_area_name(chassis, TRUE) || "Unknown"]<br>
+				<b>Active Equipment:</b> [chassis.selected || "None"]"}
+	if(istype(chassis, /obj/mecha/working/ripley))
+		var/obj/mecha/working/ripley/RM = chassis
+		answer += "<br><b>Used Cargo Space:</b> [round((RM.cargo.len / RM.cargo_capacity * 100), 0.01)]%"
 
-	emp_act()
-		del src
+	return answer
+
+/obj/item/mecha_parts/mecha_tracking/emp_act()
+	. = ..()
+	if(!(. & EMP_PROTECT_SELF))
+		qdel(src)
+
+/obj/item/mecha_parts/mecha_tracking/Destroy()
+	if(chassis)
+		if(src in chassis.trackers)
+			chassis.trackers -= src
+	chassis = null
+	return ..()
+
+/obj/item/mecha_parts/mecha_tracking/try_attach_part(mob/user, obj/mecha/M)
+	if(!..())
 		return
+	M.trackers += src
+	M.diag_hud_set_mechtracking()
+	chassis = M
 
-	ex_act()
-		del src
+/**
+  * Attempts to EMP mech that the tracker is attached to, if there is one and tracker is not on cooldown
+  */
+/obj/item/mecha_parts/mecha_tracking/proc/shock()
+	if(recharging)
 		return
+	if(chassis)
+		chassis.emp_act(EMP_HEAVY)
+		addtimer(CALLBACK(src, /obj/item/mecha_parts/mecha_tracking/proc/recharge), 5 SECONDS, TIMER_UNIQUE | TIMER_OVERRIDE)
+		recharging = TRUE
 
-	proc/in_mecha()
-		if(istype(src.loc, /obj/mecha))
-			return src.loc
-		return 0
+/**
+  * Resets recharge variable, allowing tracker to be EMP pulsed again
+  */
+/obj/item/mecha_parts/mecha_tracking/proc/recharge()
+	recharging = FALSE
 
-	proc/shock()
-		var/obj/mecha/M = in_mecha()
-		if(M)
-			M.emp_act(2)
-		del(src)
+/obj/item/mecha_parts/mecha_tracking/ai_control
+	name = "exosuit AI control beacon"
+	desc = "A device used to transmit exosuit data. Also allows active AI units to take control of said exosuit."
+	ai_beacon = TRUE
 
-	proc/get_mecha_log()
-		if(!src.in_mecha())
-			return 0
-		var/obj/mecha/M = src.loc
-		return M.get_log_html()
+/obj/item/storage/box/mechabeacons
+	name = "exosuit tracking beacons"
 
-
-/obj/item/weapon/storage/box/mechabeacons
-	name = "Exosuit Tracking Beacons"
-	New()
-		..()
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
-		new /obj/item/mecha_parts/mecha_tracking(src)
+/obj/item/storage/box/mechabeacons/PopulateContents()
+	..()
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)
+	new /obj/item/mecha_parts/mecha_tracking(src)

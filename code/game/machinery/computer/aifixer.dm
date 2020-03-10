@@ -1,165 +1,135 @@
 /obj/machinery/computer/aifixer
-	name = "AI System Integrity Restorer"
-	icon = 'icons/obj/computer.dmi'
-	icon_state = "ai-fixer"
-	req_access = list(access_captain, access_robotics, access_heads)
-	var/mob/living/silicon/ai/occupant = null
-	var/active = 0
+	name = "\improper AI system integrity restorer"
+	desc = "Used with intelliCards containing nonfunctional AIs to restore them to working order."
+	req_access = list(ACCESS_CAPTAIN, ACCESS_ROBOTICS, ACCESS_HEADS)
+	circuit = /obj/item/circuitboard/computer/aifixer
+	icon_keyboard = "tech_key"
+	icon_screen = "ai-fixer"
+	light_color = LIGHT_COLOR_PINK
+	ui_x = 370
+	ui_y = 360
+	/// Variable containing transferred AI
+	var/mob/living/silicon/ai/occupier
+	/// Variable dictating if we are in the process of restoring the occupier AI
+	var/restoring = FALSE
 
-/obj/machinery/computer/aifixer/New()
-	src.overlays += image('icons/obj/computer.dmi', "ai-fixer-empty")
+/obj/machinery/computer/aifixer/screwdriver_act(mob/living/user, obj/item/I)
+	if(occupier)
+		if(machine_stat & (NOPOWER|BROKEN))
+			to_chat(user, "<span class='warning'>The screws on [name]'s screen won't budge.</span>")
+		else
+			to_chat(user, "<span class='warning'>The screws on [name]'s screen won't budge and it emits a warning beep.</span>")
+	else
+		return ..()
 
+/obj/machinery/computer/aifixer/ui_interact(mob/user, ui_key = "main", datum/tgui/ui = null, force_open = FALSE, \
+									datum/tgui/master_ui = null, datum/ui_state/state = GLOB.default_state)
+	ui = SStgui.try_update_ui(user, src, ui_key, ui, force_open)
+	if(!ui)
+		ui = new(user, src, ui_key, "ai_restorer", name, ui_x, ui_y, master_ui, state)
+		ui.open()
 
-/obj/machinery/computer/aifixer/attackby(I as obj, user as mob)
-/*
-	if(istype(I, /obj/item/weapon/screwdriver))
-		playsound(src.loc, 'sound/items/Screwdriver.ogg', 50, 1)
-		if(do_after(user, 20))
-			if (src.stat & BROKEN)
-				user << "\blue The broken glass falls out."
-				var/obj/structure/computerframe/A = new /obj/structure/computerframe( src.loc )
-				new /obj/item/weapon/shard( src.loc )
-				var/obj/item/weapon/circuitboard/robotics/M = new /obj/item/weapon/circuitboard/robotics( A )
-				for (var/obj/C in src)
-					C.loc = src.loc
-				M.id = src.id
-				A.circuit = M
-				A.state = 3
-				A.icon_state = "3"
-				A.anchored = 1
-				del(src)
-			else
-				user << "\blue You disconnect the monitor."
-				var/obj/structure/computerframe/A = new /obj/structure/computerframe( src.loc )
-				var/obj/item/weapon/circuitboard/robotics/M = new /obj/item/weapon/circuitboard/robotics( A )
-				for (var/obj/C in src)
-					C.loc = src.loc
-				M.id = src.id
-				A.circuit = M
-				A.state = 4
-				A.icon_state = "4"
-				A.anchored = 1
-				del(src)
-*/
-	if(istype(I, /obj/item/device/aicard))
-		if(stat & (NOPOWER|BROKEN))
-			user << "This terminal isn't functioning right now, get it working!"
-			return
-		I:transfer_ai("AIFIXER","AICARD",src,user)
+/obj/machinery/computer/aifixer/ui_data(mob/user)
+	var/list/data = list()
 
-	//src.attack_hand(user)
-	return
+	data["ejectable"] = FALSE
+	data["AI_present"] = FALSE
+	data["error"] = null
+	if(!occupier)
+		data["error"] = "Please transfer an AI unit."
+	else
+		data["AI_present"] = TRUE
+		data["name"] = occupier.name
+		data["restoring"] = restoring
+		data["health"] = (occupier.health + 100) / 2
+		data["isDead"] = occupier.stat == DEAD
+		data["laws"] = occupier.laws.get_law_list(include_zeroth = 1)
 
-/obj/machinery/computer/aifixer/attack_ai(var/mob/user as mob)
-	return attack_hand(user)
+	return data
 
-/obj/machinery/computer/aifixer/attack_paw(var/mob/user as mob)
-	return attack_hand(user)
-
-/obj/machinery/computer/aifixer/attack_hand(var/mob/user as mob)
+/obj/machinery/computer/aifixer/ui_act(action, params)
 	if(..())
 		return
+	if(!occupier)
+		restoring = FALSE
 
-	if(ishuman(user))//Checks to see if they are ninja
-		if(istype(user:gloves, /obj/item/clothing/gloves/space_ninja)&&user:gloves:candrain&&!user:gloves:draining)
-			if(user:wear_suit:s_control)
-				user:wear_suit.transfer_ai("AIFIXER","NINJASUIT",src,user)
-			else
-				user << "\red <b>ERROR</b>: \black Remote access channel disabled."
-			return
+	switch(action)
+		if("PRG_beginReconstruction")
+			if(occupier?.health < 100)
+				to_chat(usr, "<span class='notice'>Reconstruction in progress. This will take several minutes.</span>")
+				playsound(src, 'sound/machines/terminal_prompt_confirm.ogg', 25, FALSE)
+				restoring = TRUE
+				occupier.notify_ghost_cloning("Your core files are being restored!", source = src)
+				. = TRUE
 
-	user.set_machine(src)
-	var/dat = ""
-
-	if (src.occupant)
-		var/laws
-		dat += "<h3>Stored AI: [src.occupant.name]</h3>"
-		dat += "<b>System integrity:</b> [(src.occupant.health+100)/2]%<br>"
-
-		if (src.occupant.laws.zeroth)
-			laws += "<b>0:</b> [src.occupant.laws.zeroth]<BR>"
-
-		var/number = 1
-		for (var/index = 1, index <= src.occupant.laws.inherent.len, index++)
-			var/law = src.occupant.laws.inherent[index]
-			if (length(law) > 0)
-				laws += "<b>[number]:</b> [law]<BR>"
-				number++
-
-		for (var/index = 1, index <= src.occupant.laws.supplied.len, index++)
-			var/law = src.occupant.laws.supplied[index]
-			if (length(law) > 0)
-				laws += "<b>[number]:</b> [law]<BR>"
-				number++
-
-		dat += "<b>Laws:</b><br>[laws]<br>"
-
-		if (src.occupant.stat == 2)
-			dat += "<span class='bad'>AI non-functional</span>"
-		else
-			dat += "<span class='good'>AI functional</span>"
-		if (!src.active)
-			dat += {"<br><br><A href='byond://?src=\ref[src];fix=1'>Begin Reconstruction</A>"}
-		else
-			dat += "<br><br>Reconstruction in process, please wait.<br>"
-	dat += {"<br><A href='?src=\ref[user];mach_close=computer'>Close</A>"}
-
-	//user << browse(dat, "window=computer;size=400x500")
-	//onclose(user, "computer")
-	var/datum/browser/popup = new(user, "computer", "AI System Integrity Restorer", 400, 500)
-	popup.set_content(dat)
-	popup.set_title_image(user.browse_rsc_icon(src.icon, src.icon_state))
-	popup.open()
-	return
+/obj/machinery/computer/aifixer/proc/Fix()
+	use_power(1000)
+	occupier.adjustOxyLoss(-5, 0)
+	occupier.adjustFireLoss(-5, 0)
+	occupier.adjustToxLoss(-5, 0)
+	occupier.adjustBruteLoss(-5, 0)
+	occupier.updatehealth()
+	if(occupier.health >= 0 && occupier.stat == DEAD)
+		occupier.revive(full_heal = FALSE, admin_revive = FALSE)
+		if(!occupier.radio_enabled)
+			occupier.radio_enabled = TRUE
+			to_chat(occupier, "<span class='warning'>Your Subspace Transceiver has been enabled!</span>")
+	return occupier.health < 100
 
 /obj/machinery/computer/aifixer/process()
 	if(..())
-		src.updateDialog()
+		if(restoring)
+			var/oldstat = occupier.stat
+			restoring = Fix()
+			if(oldstat != occupier.stat)
+				update_icon()
+
+/obj/machinery/computer/aifixer/update_overlays()
+	. = ..()
+	if(machine_stat & (NOPOWER|BROKEN))
 		return
 
-/obj/machinery/computer/aifixer/Topic(href, href_list)
-	if(..())
-		return
-	if (href_list["fix"])
-		src.active = 1
-		src.overlays += image('icons/obj/computer.dmi', "ai-fixer-on")
-		while (src.occupant.health < 100)
-			src.occupant.adjustOxyLoss(-1)
-			src.occupant.adjustFireLoss(-1)
-			src.occupant.adjustToxLoss(-1)
-			src.occupant.adjustBruteLoss(-1)
-			src.occupant.updatehealth()
-			if (src.occupant.health >= 0 && src.occupant.stat == 2)
-				src.occupant.stat = 0
-				src.occupant.lying = 0
-				dead_mob_list -= src.occupant
-				living_mob_list += src.occupant
-				src.overlays -= image('icons/obj/computer.dmi', "ai-fixer-404")
-				src.overlays += image('icons/obj/computer.dmi', "ai-fixer-full")
-			src.updateUsrDialog()
-			sleep(10)
-		src.active = 0
-		src.overlays -= image('icons/obj/computer.dmi', "ai-fixer-on")
-
-
-		src.add_fingerprint(usr)
-	src.updateUsrDialog()
-	return
-
-
-/obj/machinery/computer/aifixer/update_icon()
-	..()
-	// Broken / Unpowered
-	if((stat & BROKEN) || (stat & NOPOWER))
-		overlays.Cut()
-
-	// Working / Powered
+	if(restoring)
+		. += "ai-fixer-on"
+	if (occupier)
+		switch (occupier.stat)
+			if (CONSCIOUS)
+				. += "ai-fixer-full"
+			if (UNCONSCIOUS)
+				. += "ai-fixer-404"
 	else
-		if (occupant)
-			switch (occupant.stat)
-				if (0)
-					overlays += image('icons/obj/computer.dmi', "ai-fixer-full")
-				if (2)
-					overlays += image('icons/obj/computer.dmi', "ai-fixer-404")
-		else
-			overlays += image('icons/obj/computer.dmi', "ai-fixer-empty")
+		. += "ai-fixer-empty"
+
+/obj/machinery/computer/aifixer/transfer_ai(interaction, mob/user, mob/living/silicon/ai/AI, obj/item/aicard/card)
+	if(!..())
+		return
+	//Downloading AI from card to terminal.
+	if(interaction == AI_TRANS_FROM_CARD)
+		if(machine_stat & (NOPOWER|BROKEN))
+			to_chat(user, "<span class='alert'>[src] is offline and cannot take an AI at this time.</span>")
+			return
+		AI.forceMove(src)
+		occupier = AI
+		AI.control_disabled = TRUE
+		AI.radio_enabled = FALSE
+		to_chat(AI, "<span class='alert'>You have been uploaded to a stationary terminal. Sadly, there is no remote access from here.</span>")
+		to_chat(user, "<span class='notice'>Transfer successful</span>: [AI.name] ([rand(1000,9999)].exe) installed and executed successfully. Local copy has been removed.")
+		card.AI = null
+		update_icon()
+
+	else //Uploading AI from terminal to card
+		if(occupier && !restoring)
+			to_chat(occupier, "<span class='notice'>You have been downloaded to a mobile storage device. Still no remote access.</span>")
+			to_chat(user, "<span class='notice'>Transfer successful</span>: [occupier.name] ([rand(1000,9999)].exe) removed from host terminal and stored within local memory.")
+			occupier.forceMove(card)
+			card.AI = occupier
+			occupier = null
+			update_icon()
+		else if (restoring)
+			to_chat(user, "<span class='alert'>ERROR: Reconstruction in progress.</span>")
+		else if (!occupier)
+			to_chat(user, "<span class='alert'>ERROR: Unable to locate artificial intelligence.</span>")
+
+/obj/machinery/computer/aifixer/on_deconstruction()
+	if(occupier)
+		QDEL_NULL(occupier)

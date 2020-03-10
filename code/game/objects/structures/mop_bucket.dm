@@ -3,28 +3,28 @@
 	desc = "Fill it with water, but don't forget a mop!"
 	icon = 'icons/obj/janitor.dmi'
 	icon_state = "mopbucket"
-	density = 1
-	pressure_resistance = 5
-	flags = FPRINT | TABLEPASS | OPENCONTAINER
+	density = TRUE
 	var/amount_per_transfer_from_this = 5	//shit I dunno, adding this so syringes stop runtime erroring. --NeoFite
 
 
-/obj/structure/mopbucket/New()
-	var/datum/reagents/R = new/datum/reagents(100)
-	reagents = R
-	R.my_atom = src
+/obj/structure/mopbucket/Initialize()
+	. = ..()
+	create_reagents(100, OPENCONTAINER)
 
-
-/obj/structure/mopbucket/examine()
-	set src in usr
-	usr << "[src] \icon[src] contains [reagents.total_volume] unit\s of water!"
-	..()
-
-/obj/structure/mopbucket/attackby(obj/item/I, mob/user)
-	if(istype(I, /obj/item/weapon/mop))
+/obj/structure/mopbucket/attackby(obj/item/I, mob/user, params)
+	if(istype(I, /obj/item/mop))
 		if(reagents.total_volume < 1)
-			user << "[src] is out of water!</span>"
+			to_chat(user, "<span class='warning'>[src] is out of water!</span>")
 		else
-			reagents.trans_to(I, 5)
-			user << "<span class='notice'>You wet [I] in [src].</span>"
-			playsound(loc, 'sound/effects/slosh.ogg', 25, 1)
+			reagents.trans_to(I, 5, transfered_by = user)
+			to_chat(user, "<span class='notice'>You wet [I] in [src].</span>")
+			playsound(loc, 'sound/effects/slosh.ogg', 25, TRUE)
+			update_icon()
+	else
+		. = ..()
+		update_icon()
+
+/obj/structure/mopbucket/update_overlays()
+	. = ..()
+	if(reagents.total_volume > 0)
+		. += "mopbucket_water"

@@ -1,1248 +1,1292 @@
-/atom
-	layer = 2
-	var/level = 2
-	var/flags = FPRINT
-	var/list/fingerprints
-	var/list/fingerprintshidden
-	var/fingerprintslast = null
-	var/list/blood_DNA
-	var/last_bumped = 0
-	var/pass_flags = 0
-	var/throwpass = 0
+/**
+  * The base type for nearly all physical objects in SS13
 
-	///Chemistry.
+  * Lots and lots of functionality lives here, although in general we are striving to move
+  * as much as possible to the components/elements system
+  */
+/atom
+	layer = TURF_LAYER
+	plane = GAME_PLANE
+	var/level = 2
+
+	///If non-null, overrides a/an/some in all cases
+	var/article
+
+	///First atom flags var
+	var/flags_1 = NONE
+	///Intearaction flags
+	var/interaction_flags_atom = NONE
+
+	///Reagents holder
 	var/datum/reagents/reagents = null
 
-	//var/chem_is_open_container = 0
-	// replaced by OPENCONTAINER flags and atom/proc/is_open_container()
-	///Chemistry.
+	///This atom's HUD (med/sec, etc) images. Associative list.
+	var/list/image/hud_list = null
+	///HUD images that this atom can provide.
+	var/list/hud_possible
 
-	//Detective Work, used for the duplicate data points kept in the scanners
-	var/list/original_atom
+	///Value used to increment ex_act() if reactionary_explosions is on
+	var/explosion_block = 0
 
-/atom/proc/throw_impact(atom/hit_atom)
-	if(istype(hit_atom,/mob/living))
-		var/mob/living/M = hit_atom
-		M.hitby(src)
-
-	else if(isobj(hit_atom))
-		var/obj/O = hit_atom
-		if(!O.anchored)
-			step(O, src.dir)
-		O.hitby(src)
-
-	else if(isturf(hit_atom))
-		var/turf/T = hit_atom
-		if(T.density)
-			spawn(2)
-				step(src, turn(src.dir, 180))
-			if(istype(src,/mob/living))
-				var/mob/living/M = src
-				M.take_organ_damage(20)
+	/**
+	  * used to store the different colors on an atom
+	  *
+	  * its inherent color, the colored paint applied on it, special color effect etc...
+	  */
+	var/list/atom_colours
 
 
-/atom/proc/assume_air(datum/air_group/giver)
-	del(giver)
+	///overlays that should remain on top and not normally removed when using cut_overlay functions, like c4.
+	var/list/priority_overlays
+	/// a very temporary list of overlays to remove
+	var/list/remove_overlays
+	/// a very temporary list of overlays to add
+	var/list/add_overlays
+
+	///vis overlays managed by SSvis_overlays to automaticaly turn them like other overlays
+	var/list/managed_vis_overlays
+	///overlays managed by [update_overlays][/atom/proc/update_overlays] to prevent removing overlays that weren't added by the same proc
+	var/list/managed_overlays
+
+	///Proximity monitor associated with this atom
+	var/datum/proximity_monitor/proximity_monitor
+	///Cooldown tick timer for buckle messages
+	var/buckle_message_cooldown = 0
+	///Last fingerprints to touch this atom
+	var/fingerprintslast
+
+	var/list/filter_data //For handling persistent filters
+
+	///Economy cost of item
+	var/custom_price
+	///Economy cost of item in premium vendor
+	var/custom_premium_price
+
+	//List of datums orbiting this atom
+	var/datum/component/orbiter/orbiters
+
+	/// Will move to flags_1 when i can be arsed to (2019, has not done so)
+	var/rad_flags = NONE
+	/// Radiation insulation types
+	var/rad_insulation = RAD_NO_INSULATION
+
+	///The custom materials this atom is made of, used by a lot of things like furniture, walls, and floors (if I finish the functionality, that is.)
+	var/list/custom_materials
+	///Bitfield for how the atom handles materials.
+	var/material_flags = NONE
+	///Modifier that raises/lowers the effect of the amount of a material, prevents small and easy to get items from being death machines.
+	var/material_modifier = 1
+
+	var/datum/wires/wires = null
+
+	var/list/alternate_appearances
+
+/**
+  * Called when an atom is created in byond (built in engine proc)
+  *
+  * Not a lot happens here in SS13 code, as we offload most of the work to the
+  * [Intialization][/atom/proc/Initialize] proc, mostly we run the preloader
+  * if the preloader is being used and then call [InitAtom][/datum/controller/subsystem/atoms/proc/InitAtom] of which the ultimate
+  * result is that the Intialize proc is called.
+  *
+  * We also generate a tag here if the DF_USE_TAG flag is set on the atom
+  */
+/atom/New(loc, ...)
+	//atom creation method that preloads variables at creation
+	if(GLOB.use_preloader && (src.type == GLOB._preloader.target_path))//in case the instanciated atom is creating other atoms in New()
+		world.preloader_load(src)
+
+	if(datum_flags & DF_USE_TAG)
+		GenerateTag()
+
+	var/do_initialize = SSatoms.initialized
+	if(do_initialize != INITIALIZATION_INSSATOMS)
+		args[1] = do_initialize == INITIALIZATION_INNEW_MAPLOAD
+		if(SSatoms.InitAtom(src, args))
+			//we were deleted
+			return
+
+/**
+  * The primary method that objects are setup in SS13 with
+  *
+  * we don't use New as we have better control over when this is called and we can choose
+  * to delay calls or hook other logic in and so forth
+  *
+  * During roundstart map parsing, atoms are queued for intialization in the base atom/New(),
+  * After the map has loaded, then Initalize is called on all atoms one by one. NB: this
+  * is also true for loading map templates as well, so they don't Initalize until all objects
+  * in the map file are parsed and present in the world
+  *
+  * If you're creating an object at any point after SSInit has run then this proc will be
+  * immediately be called from New.
+  *
+  * mapload: This parameter is true if the atom being loaded is either being intialized during
+  * the Atom subsystem intialization, or if the atom is being loaded from the map template.
+  * If the item is being created at runtime any time after the Atom subsystem is intialized then
+  * it's false.
+  *
+  * You must always call the parent of this proc, otherwise failures will occur as the item
+  * will not be seen as initalized (this can lead to all sorts of strange behaviour, like
+  * the item being completely unclickable)
+  *
+  * You must not sleep in this proc, or any subprocs
+  *
+  * Any parameters from new are passed through (excluding loc), naturally if you're loading from a map
+  * there are no other arguments
+  *
+  * Must return an [initialization hint][INITIALIZE_HINT_NORMAL] or a runtime will occur.
+  *
+  * Note: the following functions don't call the base for optimization and must copypasta handling:
+  * * [/turf/Initialize]
+  * * [/turf/open/space/Initialize]
+  */
+/atom/proc/Initialize(mapload, ...)
+	SHOULD_NOT_SLEEP(TRUE)
+	SHOULD_CALL_PARENT(TRUE)
+	if(flags_1 & INITIALIZED_1)
+		stack_trace("Warning: [src]([type]) initialized multiple times!")
+	flags_1 |= INITIALIZED_1
+
+	//atom color stuff
+	if(color)
+		add_atom_colour(color, FIXED_COLOUR_PRIORITY)
+
+	if (light_power && light_range)
+		update_light()
+
+	if (opacity && isturf(loc))
+		var/turf/T = loc
+		T.has_opaque_atom = TRUE // No need to recalculate it in this case, it's guaranteed to be on afterwards anyways.
+
+	if (canSmoothWith)
+		canSmoothWith = typelist("canSmoothWith", canSmoothWith)
+
+	var/temp_list = list()
+	for(var/i in custom_materials)
+		temp_list[SSmaterials.GetMaterialRef(i)] = custom_materials[i] //Get the proper instanced version
+
+	custom_materials = null //Null the list to prepare for applying the materials properly
+	set_custom_materials(temp_list)
+
+	ComponentInitialize()
+
+	return INITIALIZE_HINT_NORMAL
+
+/**
+  * Late Intialization, for code that should run after all atoms have run Intialization
+  *
+  * To have your LateIntialize proc be called, your atoms [Initalization][/atom/proc/Initialize]
+  *  proc must return the hint
+  * [INITIALIZE_HINT_LATELOAD] otherwise you will never be called.
+  *
+  * useful for doing things like finding other machines on GLOB.machines because you can guarantee
+  * that all atoms will actually exist in the "WORLD" at this time and that all their Intialization
+  * code has been run
+  */
+/atom/proc/LateInitialize()
+	set waitfor = FALSE
+
+/// Put your [AddComponent] calls here
+/atom/proc/ComponentInitialize()
+	return
+
+/**
+  * Top level of the destroy chain for most atoms
+  *
+  * Cleans up the following:
+  * * Removes alternate apperances from huds that see them
+  * * qdels the reagent holder from atoms if it exists
+  * * clears the orbiters list
+  * * clears overlays and priority overlays
+  * * clears the light object
+  */
+/atom/Destroy()
+	if(alternate_appearances)
+		for(var/K in alternate_appearances)
+			var/datum/atom_hud/alternate_appearance/AA = alternate_appearances[K]
+			AA.remove_from_hud(src)
+
+	if(reagents)
+		qdel(reagents)
+
+	orbiters = null // The component is attached to us normaly and will be deleted elsewhere
+
+	LAZYCLEARLIST(overlays)
+	LAZYCLEARLIST(priority_overlays)
+
+	QDEL_NULL(light)
+
+	return ..()
+
+/atom/proc/handle_ricochet(obj/projectile/P)
+	return
+
+///Can the mover object pass this atom, while heading for the target turf
+/atom/proc/CanPass(atom/movable/mover, turf/target)
+	SHOULD_CALL_PARENT(TRUE)
+	SHOULD_BE_PURE(TRUE)
+	if(mover.movement_type & UNSTOPPABLE)
+		return TRUE
+	. = CanAllowThrough(mover, target)
+	// This is cheaper than calling the proc every time since most things dont override CanPassThrough
+	if(!mover.generic_canpass)
+		return mover.CanPassThrough(src, target, .)
+
+/// Returns true or false to allow the mover to move through src
+/atom/proc/CanAllowThrough(atom/movable/mover, turf/target)
+	SHOULD_CALL_PARENT(TRUE)
+	SHOULD_BE_PURE(TRUE)
+	return !density
+
+/**
+  * Is this atom currently located on centcom
+  *
+  * Specifically, is it on the z level and within the centcom areas
+  *
+  * You can also be in a shuttleshuttle during endgame transit
+  *
+  * Used in gamemode to identify mobs who have escaped and for some other areas of the code
+  * who don't want atoms where they shouldn't be
+  */
+/atom/proc/onCentCom()
+	var/turf/T = get_turf(src)
+	if(!T)
+		return FALSE
+
+	if(is_reserved_level(T.z))
+		for(var/A in SSshuttle.mobile)
+			var/obj/docking_port/mobile/M = A
+			if(M.launch_status == ENDGAME_TRANSIT)
+				for(var/place in M.shuttle_areas)
+					var/area/shuttle/shuttle_area = place
+					if(T in shuttle_area)
+						return TRUE
+
+	if(!is_centcom_level(T.z))//if not, don't bother
+		return FALSE
+
+	//Check for centcom itself
+	if(istype(T.loc, /area/centcom))
+		return TRUE
+
+	//Check for centcom shuttles
+	for(var/A in SSshuttle.mobile)
+		var/obj/docking_port/mobile/M = A
+		if(M.launch_status == ENDGAME_LAUNCHED)
+			for(var/place in M.shuttle_areas)
+				var/area/shuttle/shuttle_area = place
+				if(T in shuttle_area)
+					return TRUE
+
+/**
+  * Is the atom in any of the centcom syndicate areas
+  *
+  * Either in the syndie base on centcom, or any of their shuttles
+  *
+  * Also used in gamemode code for win conditions
+  */
+/atom/proc/onSyndieBase()
+	var/turf/T = get_turf(src)
+	if(!T)
+		return FALSE
+
+	if(!is_centcom_level(T.z))//if not, don't bother
+		return FALSE
+
+	if(istype(T.loc, /area/shuttle/syndicate) || istype(T.loc, /area/syndicate_mothership) || istype(T.loc, /area/shuttle/assault_pod))
+		return TRUE
+
+	return FALSE
+
+/**
+  * Is the atom in an away mission
+  *
+  * Must be in the away mission z-level to return TRUE
+  *
+  * Also used in gamemode code for win conditions
+  */
+/atom/proc/onAwayMission()
+	var/turf/T = get_turf(src)
+	if(!T)
+		return FALSE
+
+	if(is_away_level(T.z))
+		return TRUE
+
+	return FALSE
+
+
+
+///This atom has been hit by a hulkified mob in hulk mode (user)
+/atom/proc/attack_hulk(mob/living/carbon/human/user)
+	SEND_SIGNAL(src, COMSIG_ATOM_HULK_ATTACK, user)
+
+/**
+  * Ensure a list of atoms/reagents exists inside this atom
+  *
+  * Goes throught he list of passed in parts, if they're reagents, adds them to our reagent holder
+  * creating the reagent holder if it exists.
+  *
+  * If the part is a moveable atom and the  previous location of the item was a mob/living,
+  * it calls the inventory handler transferItemToLoc for that mob/living and transfers the part
+  * to this atom
+  *
+  * Otherwise it simply forceMoves the atom into this atom
+  */
+/atom/proc/CheckParts(list/parts_list)
+	for(var/A in parts_list)
+		if(istype(A, /datum/reagent))
+			if(!reagents)
+				reagents = new()
+			reagents.reagent_list.Add(A)
+			reagents.conditional_update()
+		else if(ismovable(A))
+			var/atom/movable/M = A
+			if(isliving(M.loc))
+				var/mob/living/L = M.loc
+				L.transferItemToLoc(M, src)
+			else
+				M.forceMove(src)
+
+///Hook for multiz???
+/atom/proc/update_multiz(prune_on_fail = FALSE)
+	return FALSE
+
+///Take air from the passed in gas mixture datum
+/atom/proc/assume_air(datum/gas_mixture/giver)
+	qdel(giver)
 	return null
 
+///Remove air from this atom
 /atom/proc/remove_air(amount)
 	return null
 
+///Return the current air environment in this atom
 /atom/proc/return_air()
 	if(loc)
 		return loc.return_air()
 	else
 		return null
 
-/atom/proc/check_eye(user as mob)
-	if (istype(user, /mob/living/silicon/ai)) // WHYYYY
-		return 1
+///Return the air if we can analyze it
+/atom/proc/return_analyzable_air()
+	return null
+
+///Check if this atoms eye is still alive (probably)
+/atom/proc/check_eye(mob/user)
 	return
 
-/atom/proc/on_reagent_change()
-	return
+/atom/proc/Bumped(atom/movable/AM)
+	set waitfor = FALSE
+	SEND_SIGNAL(src, COMSIG_ATOM_BUMPED, AM)
 
-/atom/proc/Bumped(AM as mob|obj)
-	return
-
-// Convenience proc to see if a container is open for chemistry handling
-// returns true if open
-// false if closed
+/// Convenience proc to see if a container is open for chemistry handling
 /atom/proc/is_open_container()
-	return flags & OPENCONTAINER
+	return is_refillable() && is_drainable()
 
-/*//Convenience proc to see whether a container can be accessed in a certain way.
+/// Is this atom injectable into other atoms
+/atom/proc/is_injectable(mob/user, allowmobs = TRUE)
+	return reagents && (reagents.flags & (INJECTABLE | REFILLABLE))
 
-	proc/can_subract_container()
-		return flags & EXTRACT_CONTAINER
+/// Can we draw from this atom with an injectable atom
+/atom/proc/is_drawable(mob/user, allowmobs = TRUE)
+	return reagents && (reagents.flags & (DRAWABLE | DRAINABLE))
 
-	proc/can_add_container()
-		return flags & INSERT_CONTAINER
-*/
+/// Can this atoms reagents be refilled
+/atom/proc/is_refillable()
+	return reagents && (reagents.flags & REFILLABLE)
 
+/// Is this atom drainable of reagents
+/atom/proc/is_drainable()
+	return reagents && (reagents.flags & DRAINABLE)
 
-/atom/proc/meteorhit(obj/meteor as obj)
-	return
-
-/atom/proc/allow_drop()
-	return 1
+/// Are you allowed to drop this atom
+/atom/proc/AllowDrop()
+	return FALSE
 
 /atom/proc/CheckExit()
 	return 1
 
-/atom/proc/HasEntered(atom/movable/AM as mob|obj)
-	return
-
+///Is this atom within 1 tile of another atom
 /atom/proc/HasProximity(atom/movable/AM as mob|obj)
 	return
 
-/atom/proc/emp_act(var/severity)
-	return
+/**
+  * React to an EMP of the given severity
+  *
+  * Default behaviour is to send the [COMSIG_ATOM_EMP_ACT] signal
+  *
+  * If the signal does not return protection, and there are attached wires then we call
+  * [emp_pulse][/datum/wires/proc/emp_pulse] on the wires
+  *
+  * We then return the protection value
+  */
+/atom/proc/emp_act(severity)
+	var/protection = SEND_SIGNAL(src, COMSIG_ATOM_EMP_ACT, severity)
+	if(!(protection & EMP_PROTECT_WIRES) && istype(wires))
+		wires.emp_pulse()
+	return protection // Pass the protection value collected here upwards
 
-/atom/proc/bullet_act(var/obj/item/projectile/Proj)
-	return 0
+/**
+  * React to a hit by a projectile object
+  *
+  * Default behaviour is to send the [COMSIG_ATOM_BULLET_ACT] and then call [on_hit][/obj/projectile/proc/on_hit] on the projectile
+  */
+/atom/proc/bullet_act(obj/projectile/P, def_zone)
+	SEND_SIGNAL(src, COMSIG_ATOM_BULLET_ACT, P, def_zone)
+	. = P.on_hit(src, 0, def_zone)
 
+///Return true if we're inside the passed in atom
 /atom/proc/in_contents_of(container)//can take class or object instance as argument
 	if(ispath(container))
 		if(istype(src.loc, container))
-			return 1
+			return TRUE
 	else if(src in container)
-		return 1
-	return
+		return TRUE
+	return FALSE
 
-/*
- *	atom/proc/search_contents_for(path,list/filter_path=null)
- * Recursevly searches all atom contens (including contents contents and so on).
- *
- * ARGS: path - search atom contents for atoms of this type
- *       list/filter_path - if set, contents of atoms not of types in this list are excluded from search.
- *
- * RETURNS: list of found atoms
- */
+/**
+  * Get the name of this object for examine
+  *
+  * You can override what is returned from this proc by registering to listen for the
+  * [COMSIG_ATOM_GET_EXAMINE_NAME] signal
+  */
+/atom/proc/get_examine_name(mob/user)
+	. = "\a [src]"
+	var/list/override = list(gender == PLURAL ? "some" : "a", " ", "[name]")
+	if(article)
+		. = "[article] [src]"
+		override[EXAMINE_POSITION_ARTICLE] = article
+	if(SEND_SIGNAL(src, COMSIG_ATOM_GET_EXAMINE_NAME, user, override) & COMPONENT_EXNAME_CHANGED)
+		. = override.Join("")
 
-/atom/proc/search_contents_for(path,list/filter_path=null)
-	var/list/found = list()
-	for(var/atom/A in src)
-		if(istype(A, path))
-			found += A
-		if(filter_path)
-			var/pass = 0
-			for(var/type in filter_path)
-				pass |= istype(A, type)
-			if(!pass)
-				continue
-		if(A.contents.len)
-			found += A.search_contents_for(path,filter_path)
-	return found
+///Generate the full examine string of this atom (including icon for goonchat)
+/atom/proc/get_examine_string(mob/user, thats = FALSE)
+	return "[icon2html(src, user)] [thats? "That's ":""][get_examine_name(user)]"
 
+/**
+  * Called when a mob examines (shift click or verb) this atom
+  *
+  * Default behaviour is to get the name and icon of the object and it's reagents where
+  * the [TRANSPARENT] flag is set on the reagents holder
+  *
+  * Produces a signal [COMSIG_PARENT_EXAMINE]
+  */
+/atom/proc/examine(mob/user)
+	. = list("[get_examine_string(user, TRUE)].")
 
-
-
-/*
-Beam code by Gunbuddy
-
-Beam() proc will only allow one beam to come from a source at a time.  Attempting to call it more than
-once at a time per source will cause graphical errors.
-Also, the icon used for the beam will have to be vertical and 32x32.
-The math involved assumes that the icon is vertical to begin with so unless you want to adjust the math,
-its easier to just keep the beam vertical.
-*/
-/atom/proc/Beam(atom/BeamTarget,icon_state="b_beam",icon='icons/effects/beam.dmi',time=50, maxdistance=10)
-	//BeamTarget represents the target for the beam, basically just means the other end.
-	//Time is the duration to draw the beam
-	//Icon is obviously which icon to use for the beam, default is beam.dmi
-	//Icon_state is what icon state is used. Default is b_beam which is a blue beam.
-	//Maxdistance is the longest range the beam will persist before it gives up.
-	var/EndTime=world.time+time
-	while(BeamTarget&&world.time<EndTime&&get_dist(src,BeamTarget)<maxdistance&&z==BeamTarget.z)
-	//If the BeamTarget gets deleted, the time expires, or the BeamTarget gets out
-	//of range or to another z-level, then the beam will stop.  Otherwise it will
-	//continue to draw.
-
-		dir=get_dir(src,BeamTarget)	//Causes the source of the beam to rotate to continuosly face the BeamTarget.
-
-		for(var/obj/effect/overlay/beam/O in orange(10,src))	//This section erases the previously drawn beam because I found it was easier to
-			if(O.BeamSource==src)				//just draw another instance of the beam instead of trying to manipulate all the
-				del O							//pieces to a new orientation.
-		var/Angle=round(Get_Angle(src,BeamTarget))
-		var/icon/I=new(icon,icon_state)
-		I.Turn(Angle)
-		var/DX=(32*BeamTarget.x+BeamTarget.pixel_x)-(32*x+pixel_x)
-		var/DY=(32*BeamTarget.y+BeamTarget.pixel_y)-(32*y+pixel_y)
-		var/N=0
-		var/length=round(sqrt((DX)**2+(DY)**2))
-		for(N,N<length,N+=32)
-			var/obj/effect/overlay/beam/X=new(loc)
-			X.BeamSource=src
-			if(N+32>length)
-				var/icon/II=new(icon,icon_state)
-				II.DrawBox(null,1,(length-N),32,32)
-				II.Turn(Angle)
-				X.icon=II
-			else X.icon=I
-			var/Pixel_x=round(sin(Angle)+32*sin(Angle)*(N+16)/32)
-			var/Pixel_y=round(cos(Angle)+32*cos(Angle)*(N+16)/32)
-			if(DX==0) Pixel_x=0
-			if(DY==0) Pixel_y=0
-			if(Pixel_x>32)
-				for(var/a=0, a<=Pixel_x,a+=32)
-					X.x++
-					Pixel_x-=32
-			if(Pixel_x<-32)
-				for(var/a=0, a>=Pixel_x,a-=32)
-					X.x--
-					Pixel_x+=32
-			if(Pixel_y>32)
-				for(var/a=0, a<=Pixel_y,a+=32)
-					X.y++
-					Pixel_y-=32
-			if(Pixel_y<-32)
-				for(var/a=0, a>=Pixel_y,a-=32)
-					X.y--
-					Pixel_y+=32
-			X.pixel_x=Pixel_x
-			X.pixel_y=Pixel_y
-		sleep(3)	//Changing this to a lower value will cause the beam to follow more smoothly with movement, but it will also be more laggy.
-					//I've found that 3 ticks provided a nice balance for my use.
-	for(var/obj/effect/overlay/beam/O in orange(10,src)) if(O.BeamSource==src) del O
-
-
-//All atoms
-/atom/verb/examine()
-	set name = "Examine"
-	set category = "IC"
-	set src in oview(12)	//make it work from farther away
-
-	if (!( usr ))
-		return
-	usr << "That's \a [src]." //changed to "That's" from "This is" because "This is some metal sheets" sounds dumb compared to "That's some metal sheets" ~Carn
 	if(desc)
-		usr << desc
-	// *****RM
-	//usr << "[name]: Dn:[density] dir:[dir] cont:[contents] icon:[icon] is:[icon_state] loc:[loc]"
+		. += desc
+
+	if(custom_materials)
+		var/list/materials_list = list()
+		for(var/i in custom_materials)
+			var/datum/material/M = i
+			materials_list += "[M.name]"
+		. += "<u>It is made out of [english_list(materials_list)]</u>."
+	if(reagents)
+		if(reagents.flags & TRANSPARENT)
+			. += "It contains:"
+			if(length(reagents.reagent_list))
+				if(user.can_see_reagents()) //Show each individual reagent
+					for(var/datum/reagent/R in reagents.reagent_list)
+						. += "[R.volume] units of [R.name]"
+				else //Otherwise, just show the total volume
+					var/total_volume = 0
+					for(var/datum/reagent/R in reagents.reagent_list)
+						total_volume += R.volume
+					. += "[total_volume] units of various reagents"
+			else
+				. += "Nothing."
+		else if(reagents.flags & AMOUNT_VISIBLE)
+			if(reagents.total_volume)
+				. += "<span class='notice'>It has [reagents.total_volume] unit\s left.</span>"
+			else
+				. += "<span class='danger'>It's empty.</span>"
+
+	SEND_SIGNAL(src, COMSIG_PARENT_EXAMINE, user, .)
+
+/// Updates the icon of the atom
+/atom/proc/update_icon()
+	var/signalOut = SEND_SIGNAL(src, COMSIG_ATOM_UPDATE_ICON)
+	. = FALSE
+
+	if(!(signalOut & COMSIG_ATOM_NO_UPDATE_ICON_STATE))
+		update_icon_state()
+		. = TRUE
+
+	if(!(signalOut & COMSIG_ATOM_NO_UPDATE_OVERLAYS))
+		var/list/new_overlays = update_overlays()
+		if(managed_overlays)
+			cut_overlay(managed_overlays)
+			managed_overlays = null
+		if(length(new_overlays))
+			managed_overlays = new_overlays
+			add_overlay(new_overlays)
+		. = TRUE
+
+	SEND_SIGNAL(src, COMSIG_ATOM_UPDATED_ICON, signalOut, .)
+
+/// Updates the icon state of the atom
+/atom/proc/update_icon_state()
+
+/// Updates the overlays of the atom
+/atom/proc/update_overlays()
+	SHOULD_CALL_PARENT(1)
+	. = list()
+	SEND_SIGNAL(src, COMSIG_ATOM_UPDATE_OVERLAYS, .)
+
+/**
+  * An atom we are buckled or is contained within us has tried to move
+  *
+  * Default behaviour is to send a warning that the user can't move while buckled as long
+  * as the [buckle_message_cooldown][/atom/var/buckle_message_cooldown] has expired (50 ticks)
+  */
+/atom/proc/relaymove(mob/user)
+	if(buckle_message_cooldown <= world.time)
+		buckle_message_cooldown = world.time + 50
+		to_chat(user, "<span class='warning'>You can't move while buckled to [src]!</span>")
 	return
 
-/atom/proc/MouseDrop_T()
+/// Handle what happens when your contents are exploded by a bomb
+/atom/proc/contents_explosion(severity, target)
+	return //For handling the effects of explosions on contents that would not normally be effected
+
+/**
+  * React to being hit by an explosion
+  *
+  * Default behaviour is to call [contents_explosion][/atom/proc/contents_explosion] and send the [COMSIG_ATOM_EX_ACT] signal
+  */
+/atom/proc/ex_act(severity, target)
+	set waitfor = FALSE
+	contents_explosion(severity, target)
+	SEND_SIGNAL(src, COMSIG_ATOM_EX_ACT, severity, target)
+
+/**
+  * React to a hit by a blob objecd
+  *
+  * default behaviour is to send the [COMSIG_ATOM_BLOB_ACT] signal
+  */
+/atom/proc/blob_act(obj/structure/blob/B)
+	SEND_SIGNAL(src, COMSIG_ATOM_BLOB_ACT, B)
 	return
 
-/atom/proc/relaymove()
+/atom/proc/fire_act(exposed_temperature, exposed_volume)
+	SEND_SIGNAL(src, COMSIG_ATOM_FIRE_ACT, exposed_temperature, exposed_volume)
 	return
 
-/atom/proc/ex_act()
+/**
+  * React to being hit by a thrown object
+  *
+  * Default behaviour is to call [hitby_react][/atom/proc/hitby_react] on ourselves after 2 seconds if we are dense
+  * and under normal gravity.
+  *
+  * Im not sure why this the case, maybe to prevent lots of hitby's if the thrown object is
+  * deleted shortly after hitting something (during explosions or other massive events that
+  * throw lots of items around - singularity being a notable example)
+  */
+/atom/proc/hitby(atom/movable/AM, skipcatch, hitpush, blocked, datum/thrownthing/throwingdatum)
+	if(density && !has_gravity(AM)) //thrown stuff bounces off dense stuff in no grav, unless the thrown stuff ends up inside what it hit(embedding, bola, etc...).
+		addtimer(CALLBACK(src, .proc/hitby_react, AM), 2)
+
+/**
+  * We have have actually hit the passed in atom
+  *
+  * Default behaviour is to move back from the item that hit us
+  */
+/atom/proc/hitby_react(atom/movable/AM)
+	if(AM && isturf(AM.loc))
+		step(AM, turn(AM.dir, 180))
+
+///Handle the atom being slipped over
+/atom/proc/handle_slip(mob/living/carbon/C, knockdown_amount, obj/O, lube, paralyze, force_drop)
 	return
 
-/atom/proc/blob_act()
-	return
-
-/atom/proc/fire_act()
-	return
-
-/atom/proc/attack_hand(mob/user as mob)
-	return
-
-/atom/proc/attack_paw(mob/user as mob)
-	return
-
-/atom/proc/attack_ai(mob/user as mob)
-	return
-
-/atom/proc/attack_robot(mob/user as mob)
-	attack_ai(user)
-	return
-
-/atom/proc/attack_animal(mob/user as mob)
-	return
-
-/atom/proc/attack_ghost(mob/user as mob)
-	src.examine()
-	return
-
-/atom/proc/attack_admin(mob/user as mob)
-	if(!user || !user.client || !user.client.holder)
+///returns the mob's dna info as a list, to be inserted in an object's blood_DNA list
+/mob/living/proc/get_blood_dna_list()
+	if(get_blood_id() != /datum/reagent/blood)
 		return
-	attack_hand(user)
+	return list("ANIMAL DNA" = "Y-")
 
-//for aliens, it works the same as monkeys except for alien-> mob interactions which will be defined in the
-//appropiate mob files
-/atom/proc/attack_alien(mob/user as mob)
-	src.attack_paw(user)
-	return
-
-/atom/proc/attack_larva(mob/user as mob)
-	return
-
-// for slimes
-/atom/proc/attack_slime(mob/user as mob)
-	return
-
-/atom/proc/hand_h(mob/user as mob)			//human (hand) - restrained
-	return
-
-/atom/proc/hand_p(mob/user as mob)			//monkey (paw) - restrained
-	return
-
-/atom/proc/hand_a(mob/user as mob)			//AI - restrained
-	return
-
-/atom/proc/hand_r(mob/user as mob)			//Cyborg (robot) - restrained
-	src.hand_a(user)
-	return
-
-/atom/proc/hand_al(mob/user as mob)			//alien - restrained
-	src.hand_p(user)
-	return
-
-/atom/proc/hand_m(mob/user as mob)			//slime - restrained
-	return
-
-
-/atom/proc/hitby(atom/movable/AM as mob|obj)
-	return
-
-/atom/proc/attackby(obj/item/weapon/W, mob/user)
-	if(isturf(src))	return
-	if(!istype(W, /obj/item/weapon/grab) && !istype(W, /obj/item/weapon/plastique) && !istype(W, /obj/item/weapon/reagent_containers/spray) && !istype(W, /obj/item/weapon/packageWrap) && !istype(W, /obj/item/device/detective_scanner))
-		visible_message("<span class='danger'>[src] has been hit by [user] with [W].</span>")
-
-
-
-//returns 1 if made bloody, returns 0 otherwise
-/atom/proc/add_blood(mob/living/carbon/human/M as mob)
-	if (!( istype(M, /mob/living/carbon/human) ))
-		return 0
-	check_dna_integrity(M)		//check dna is valid and create/setup if necessary
-	if (!( src.flags ) & FPRINT)
-		return 0
-	if(!blood_DNA || !istype(blood_DNA, /list))	//if our list of DNA doesn't exist yet (or isn't a list) initialise it.
-		blood_DNA = list()
-
-	//adding blood to items
-	if (istype(src, /obj/item)&&!istype(src, /obj/item/weapon/melee/energy))//Only regular items. Energy melee weapon are not affected.
-		var/obj/item/O = src
-
-		//if we haven't made our blood_overlay already
-		if( !O.blood_overlay )
-			var/icon/I = new /icon(O.icon, O.icon_state)
-			I.Blend(new /icon('icons/effects/blood.dmi', rgb(255,255,255)),ICON_ADD) //fills the icon_state with white (except where it's transparent)
-			I.Blend(new /icon('icons/effects/blood.dmi', "itemblood"),ICON_MULTIPLY) //adds blood and the remaining white areas become transparant
-
-			//not sure if this is worth it. It attaches the blood_overlay to every item of the same type if they don't have one already made.
-			for(var/obj/item/A in world)
-				if(A.type == O.type && !A.blood_overlay)
-					A.blood_overlay = I
-
-		//apply the blood-splatter overlay if it isn't already in there
-		if(!blood_DNA.len)
-			O.overlays += O.blood_overlay
-
-		//if this blood isn't already in the list, add it
-
-		if(blood_DNA[M.dna.unique_enzymes])
-			return 0 //already bloodied with this blood. Cannot add more.
-		blood_DNA[M.dna.unique_enzymes] = M.dna.b_type
-		return 1 //we applied blood to the item
-
-	//adding blood to turfs
-	else if (istype(src, /turf/simulated))
-		var/turf/simulated/T = src
-
-		//get one blood decal and infect it with virus from M.viruses
-		for(var/obj/effect/decal/cleanable/blood/B in T.contents)
-			if(!B.blood_DNA[M.dna.unique_enzymes])
-				B.blood_DNA[M.dna.unique_enzymes] = M.dna.b_type
-			/*for(var/datum/disease/D in M.viruses)
-				var/datum/disease/newDisease = D.Copy(1)
-				B.viruses += newDisease
-				newDisease.holder = B*/
-			return 1 //we bloodied the floor
-
-		//if there isn't a blood decal already, make one.
-		var/obj/effect/decal/cleanable/blood/newblood = new /obj/effect/decal/cleanable/blood(T)
-		newblood.blood_DNA[M.dna.unique_enzymes] = M.dna.b_type
-		/*for(var/datum/disease/D in M.viruses)
-			var/datum/disease/newDisease = D.Copy(1)
-			newblood.viruses += newDisease
-			newDisease.holder = newblood*/
-		return 1 //we bloodied the floor
-
-	//adding blood to humans
-	else if (istype(src, /mob/living/carbon/human))
-		var/mob/living/carbon/human/H = src
-		//if this blood isn't already in the list, add it
-		if(blood_DNA[H.dna.unique_enzymes])
-			return 0 //already bloodied with this blood. Cannot add more.
-		blood_DNA[H.dna.unique_enzymes] = H.dna.b_type
-		H.update_inv_gloves()	//handles bloody hands overlays and updating
-		return 1 //we applied blood to the item
-	return
-
-/atom/proc/add_vomit_floor(mob/living/carbon/M as mob, var/toxvomit = 0)
-	if( istype(src, /turf/simulated) )
-		var/obj/effect/decal/cleanable/vomit/this = new /obj/effect/decal/cleanable/vomit(src)
-
-		// Make toxins vomit look different
-		if(toxvomit)
-			this.icon_state = "vomittox_[pick(1,4)]"
-
-		/*for(var/datum/disease/D in M.viruses)
-			var/datum/disease/newDisease = D.Copy(1)
-			this.viruses += newDisease
-			newDisease.holder = this*/
-
-// Only adds blood on the floor -- Skie
-/atom/proc/add_blood_floor(mob/living/carbon/M as mob)
-	if( istype(M, /mob/living/carbon/monkey) || istype(M, /mob/living/carbon/human))
-		if( istype(src, /turf/simulated) )
-			var/turf/simulated/source1 = src
-			var/obj/effect/decal/cleanable/blood/this = new /obj/effect/decal/cleanable/blood(source1)
-			this.blood_DNA[M.dna.unique_enzymes] = M.dna.b_type
-			/*for(var/datum/disease/D in M.viruses)
-				var/datum/disease/newDisease = D.Copy(1)
-				this.viruses += newDisease
-				newDisease.holder = this*/
-
-	else if( istype(M, /mob/living/carbon/alien ))
-		if( istype(src, /turf/simulated) )
-			var/turf/simulated/source2 = src
-			var/obj/effect/decal/cleanable/xenoblood/this = new /obj/effect/decal/cleanable/xenoblood(source2)
-			this.blood_DNA["UNKNOWN BLOOD"] = "X*"
-			/*for(var/datum/disease/D in M.viruses)
-				var/datum/disease/newDisease = D.Copy(1)
-				this.viruses += newDisease
-				newDisease.holder = this*/
-
-	else if( istype(M, /mob/living/silicon/robot ))
-		if( istype(src, /turf/simulated) )
-			var/turf/simulated/source2 = src
-			new /obj/effect/decal/cleanable/oil(source2)
-
-/atom/proc/clean_blood()
-	if(istype(blood_DNA, /list))
-		del(blood_DNA)
-		return 1
-
-
-
-/atom/MouseDrop(atom/over_object as mob|obj|turf|area)
-	spawn(0)
-		if (istype(over_object, /atom))
-			over_object.MouseDrop_T(src, usr)
+///Get the mobs dna list
+/mob/living/carbon/get_blood_dna_list()
+	if(get_blood_id() != /datum/reagent/blood)
 		return
-	..()
-	return
-
-
-/atom/Click(location,control,params)
-	//world << "atom.Click() on [src] by [usr] : src.type is [src.type]"
-	if(usr.client.buildmode)
-		build_click(usr, usr.client.buildmode, location, control, params, src)
-		return
-//	if(using_new_click_proc)  //TODO ERRORAGE (see message below)
-//		return DblClickNew()
-	return DblClick(location, control, params)
-
-var/using_new_click_proc = 0 //TODO ERRORAGE (This is temporary, while the DblClickNew() proc is being tested)
-
-/atom/proc/DblClickNew()
-	if(!usr)	return
-// TODO DOOHL: Intergrate params to new proc. Saved for another time because var/valid_place is a fucking brainfuck
-
-	//Spamclick server-overloading prevention delay... THING
-	if (world.time <= usr:lastDblClick+1)
-		return
+	var/list/blood_dna = list()
+	if(dna)
+		blood_dna[dna.unique_enzymes] = dna.blood_type
 	else
-		usr:lastDblClick = world.time
+		blood_dna["UNKNOWN DNA"] = "X*"
+	return blood_dna
 
-	//paralysis and critical condition
-	if(usr.stat == 1)	//Death is handled in attack_ghost()
-		return
+/mob/living/carbon/alien/get_blood_dna_list()
+	return list("UNKNOWN DNA" = "X*")
 
-	if(!istype(usr, /mob/living/silicon/ai))
-		if (usr.paralysis || usr.stunned || usr.weakened)
-			return
+/mob/living/silicon/get_blood_dna_list()
+	return list("MOTOR OIL" = "SAE 5W-30") //just a little flavor text.
 
-	//handle the hud separately
-	if(istype(src,/obj/screen))
-		if( usr.restrained() )
-			if(ishuman(usr))
-				src.attack_hand(usr)
-			else if(isAI(usr))
-				src.attack_ai(usr)
-			else if(isrobot(usr))
-				src.attack_ai(usr)
-			else if(isobserver(usr))
-				src.attack_ghost(usr)
-			else if(ismonkey(usr))
-				src.attack_paw(usr)
-			else if(isalienadult(usr))
-				src.attack_alien(usr)
-			else if(isslime(usr))
-				src.attack_slime(usr)
-			else if(isanimal(usr))
-				src.attack_animal(usr)
-			else
-				usr << "This mob type does not support clicks to the HUD. Contact a coder."
-		else
-			if(ishuman(usr))
-				src.hand_h(usr, usr.hand)
-			else if(isAI(usr))
-				src.hand_a(usr, usr.hand)
-			else if(isrobot(usr))
-				src.hand_a(usr, usr.hand)
-			else if(isobserver(usr))
-				return
-			else if(ismonkey(usr))
-				src.hand_p(usr, usr.hand)
-			else if(isalienadult(usr))
-				src.hand_al(usr, usr.hand)
-			else if(isslime(usr))
-				return
-			else if(isanimal(usr))
-				return
-			else
-				usr << "This mob type does not support restrained clicks to the HUD. Contact a coder."
-		return
+///to add a mob's dna info into an object's blood_dna list.
+/atom/proc/transfer_mob_blood_dna(mob/living/L)
+	// Returns 0 if we have that blood already
+	var/new_blood_dna = L.get_blood_dna_list()
+	if(!new_blood_dna)
+		return FALSE
+	var/old_length = blood_DNA_length()
+	add_blood_DNA(new_blood_dna)
+	if(blood_DNA_length() == old_length)
+		return FALSE
+	return TRUE
 
-	//Gets equipped item or used module of robots
-	var/obj/item/W = usr.get_active_hand()
+///to add blood from a mob onto something, and transfer their dna info
+/atom/proc/add_mob_blood(mob/living/M)
+	var/list/blood_dna = M.get_blood_dna_list()
+	if(!blood_dna)
+		return FALSE
+	return add_blood_DNA(blood_dna)
 
-	//Attack self
-	if (W == src && usr.stat == 0)
-//		spawn (0)		//causes runtimes under heavy lag
-		W.attack_self(usr)
-		return
-
-	//Attackby, attack_hand, afterattack, etc. can only be done once every 1 second, unless an object has the NODELAY or USEDELAY flags set
-	//This segment of code determins this.
-	if(W)
-		if( !( (src.loc && src.loc == usr) || (src.loc.loc && src.loc.loc == usr) ) )
-			//The check above checks that you are not targeting an item which you are holding.
-			//If you are, (example clicking a backpack), the delays are ignored.
-			if(W.flags & USEDELAY)
-				//Objects that use the USEDELAY flag can only attack once every 2 seconds
-				if (usr.next_move < world.time)
-					usr.prev_move = usr.next_move
-					usr.next_move = world.time + 20
-				else
-					return	//A click has recently been handled already, you need to wait until the anti-spam delay between clicks passes
-			else if(!(W.flags & NODELAY))
-				//Objects with NODELAY don't have a delay between uses, while most objects have the standard 1 second delay.
-				if (usr.next_move < world.time)
-					usr.prev_move = usr.next_move
-					usr.next_move = world.time + 10
-				else
-					return	//A click has recently been handled already, you need to wait until the anti-spam delay between clicks passes
+///Is this atom in space
+/atom/proc/isinspace()
+	if(isspaceturf(get_turf(src)))
+		return TRUE
 	else
-		//Empty hand
-		if (usr.next_move < world.time)
-			usr.prev_move = usr.next_move
-			usr.next_move = world.time + 10
-		else
-			return	//A click has recently been handled already, you need to wait until the anti-spam delay between clicks passes
+		return FALSE
 
-	//Is the object in a valid place?
-	var/valid_place = 0
-	if ( isturf(src) || ( src.loc && isturf(src.loc) ) || ( src.loc.loc && isturf(src.loc.loc) ) )
-		//Object is either a turf of placed on a turf, thus valid.
-		//The third one is that it is in a container, which is on a turf, like a box,
-		//which you mouse-drag opened. Also a valid location.
-		valid_place = 1
-
-	if ( ( src.loc && (src.loc == usr) ) || ( src.loc.loc && (src.loc.loc == usr) ) )
-		//User has the object on them (in their inventory) and it is thus valid
-		valid_place = 1
-
-	//Afterattack gets performed every time you click, no matter if it's in range or not. It's used when
-	//clicking targets for guns and such. If you are clicking on a target that's not in range
-	//with an item in your hands only afterattack() needs to be performed.
-	//If the range is valid, afterattack() will be handled in the separate mob-type
-	//sections below, however only after attackby(). Attack_hand and simmilar procs are handled
-	//in the mob-type sections below, as some require you to be in range to work (human, monkey..) while others don't (ai, cyborg)
-	//Also note that afterattack does not differentiate between the holder/attacker's mob-type.
-	if( W && !valid_place)
-		W.afterattack(src, usr, (valid_place ? 1 : 0))
-		return
-
-	if(ishuman(usr))
-		var/mob/living/carbon/human/human = usr
-		//-human stuff-
-
-		if(human.stat)
-			return
-
-		if(human.in_throw_mode)
-			return human.throw_item(src)
-
-		var/in_range = in_range(src, human) || src.loc == human
-
-		if (in_range)
-			if (!( human.restrained() || human.lying ))
-				if (W)
-					attackby(W,human)
-					if (W)
-						W.afterattack(src, human)
-				else
-					attack_hand(human)
-			else
-				hand_h(human, human.hand)
-		else
-			if ( (W) && !human.restrained() )
-				W.afterattack(src, human)
-
-
-	else if(isAI(usr))
-		var/mob/living/silicon/ai/ai = usr
-		//-ai stuff-
-
-		if(ai.stat)
-			return
-
-		if (ai.control_disabled)
-			return
-
-		if( !ai.restrained() )
-			attack_ai(ai)
-		else
-			hand_a(ai, ai.hand)
-
-	else if(isrobot(usr))
-		var/mob/living/silicon/robot/robot = usr
-		//-cyborg stuff-
-
-		if(robot.stat)
-			return
-
-		if (robot.lockcharge)
-			return
-
-
-
-		if(W)
-			var/in_range = in_range(src, robot) || src.loc == robot
-			if(in_range)
-				attackby(W,robot)
-			if (W)
-				W.afterattack(src, robot)
-		else
-			if( !robot.restrained() )
-				attack_robot(robot)
-			else
-				hand_r(robot, robot.hand)
-
-	else if(isobserver(usr))
-		var/mob/dead/observer/ghost = usr
-		//-ghost stuff-
-
-		if(ghost)
-			if(W)
-				if(usr.client && usr.client.holder)
-					src.attackby(W, ghost)				//This is so admins can interact with things ingame.
-				else
-					src.attack_ghost(ghost)				//Something's gone wrong, non-admin ghosts shouldn't be able to hold things.
-			else
-				if(usr.client && usr.client.holder)
-					src.attack_admin(ghost)				//This is so admins can interact with things ingame.
-				else
-					src.attack_ghost(ghost)				//Standard click as ghost
-
-
-	else if(ismonkey(usr))
-		var/mob/living/carbon/monkey/monkey = usr
-		//-monkey stuff-
-
-		if(monkey.stat)
-			return
-
-		if(monkey.in_throw_mode)
-			return monkey.throw_item(src)
-
-		var/in_range = in_range(src, monkey) || src.loc == monkey
-
-		if (in_range)
-			if ( !monkey.restrained() )
-				if (W)
-					attackby(W,monkey)
-					if (W)
-						W.afterattack(src, monkey)
-				else
-					attack_paw(monkey)
-			else
-				hand_p(monkey, monkey.hand)
-		else
-			if ( (W) && !monkey.restrained() )
-				W.afterattack(src, monkey)
-
-	else if(isalienadult(usr))
-		var/mob/living/carbon/alien/humanoid/alien = usr
-		//-alien stuff-
-
-		if(alien.stat)
-			return
-
-		var/in_range = in_range(src, alien) || src.loc == alien
-
-		if (in_range)
-			if ( !alien.restrained() )
-				if (W)
-					attackby(W,alien)
-					if (W)
-						W.afterattack(src, alien)
-				else
-					attack_alien(alien)
-			else
-				hand_al(alien, alien.hand)
-		else
-			if ( (W) && !alien.restrained() )
-				W.afterattack(src, alien)
-
-	else if(islarva(usr))
-		var/mob/living/carbon/alien/larva/alien = usr
-		if(alien.stat)
-			return
-
-		var/in_range = in_range(src, alien) || src.loc == alien
-
-		if (in_range)
-			if ( !alien.restrained() )
-				attack_larva(alien)
-
-	else if(isslime(usr))
-		var/mob/living/carbon/slime/slime = usr
-		//-slime stuff-
-
-		if(slime.stat)
-			return
-
-		var/in_range = in_range(src, slime) || src.loc == slime
-
-		if (in_range)
-			if ( !slime.restrained() )
-				if (W)
-					attackby(W,slime)
-					if (W)
-						W.afterattack(src, slime)
-				else
-					attack_slime(slime)
-			else
-				hand_m(slime, slime.hand)
-		else
-			if ( (W) && !slime.restrained() )
-				W.afterattack(src, slime)
-
-
-	else if(isanimal(usr))
-		var/mob/living/simple_animal/animal = usr
-		//-simple animal stuff-
-
-		if(animal.stat)
-			return
-
-		var/in_range = in_range(src, animal) || src.loc == animal
-
-		if (in_range)
-			if ( !animal.restrained() )
-				attack_animal(animal)
-
-/atom/DblClick(location, control, params) //TODO: DEFERRED: REWRITE
-	if(!usr)	return
-
-	// ------- TIME SINCE LAST CLICK -------
-	if (world.time <= usr:lastDblClick+1)
-//		world << "BLOCKED atom.DblClick() on [src] by [usr] : src.type is [src.type]"
-		return
-	else
-//		world << "atom.DblClick() on [src] by [usr] : src.type is [src.type]"
-		usr:lastDblClick = world.time
-
-	//Putting it here for now. It diverts stuff to the mech clicking procs. Putting it here stops us drilling items in our inventory Carn
-	if(istype(usr.loc,/obj/mecha))
-		if(usr.client && (src in usr.client.screen))
-			return
-		var/obj/mecha/Mech = usr.loc
-		Mech.click_action(src,usr)
-		return
-
-	// ------- DIR CHANGING WHEN CLICKING ------
-	if( iscarbon(usr) && !usr.buckled )
-		if( src.x && src.y && usr.x && usr.y )
-			var/dx = src.x - usr.x
-			var/dy = src.y - usr.y
-
-			if(dy || dx)
-				if(abs(dx) < abs(dy))
-					if(dy > 0)	usr.dir = NORTH
-					else		usr.dir = SOUTH
-				else
-					if(dx > 0)	usr.dir = EAST
-					else		usr.dir = WEST
-			else
-				if(pixel_y > 16)		usr.dir = NORTH
-				else if(pixel_y < -16)	usr.dir = SOUTH
-				else if(pixel_x > 16)	usr.dir = EAST
-				else if(pixel_x < -16)	usr.dir = WEST
-
-
-
-
-	// ------- AI -------
-	else if (istype(usr, /mob/living/silicon/ai))
-		var/mob/living/silicon/ai/ai = usr
-		if (ai.control_disabled)
-			return
-
-	// ------- CYBORG -------
-	else if (istype(usr, /mob/living/silicon/robot))
-		var/mob/living/silicon/robot/bot = usr
-		if (bot.lockcharge) return
-	..()
-
-
-	// ------- SHIFT-CLICK -------
-
-	if(params)
-		var/parameters = params2list(params)
-
-		if(parameters["shift"]){
-			if(!isAI(usr))
-				ShiftClick(usr)
-			else
-				AIShiftClick(usr)
-			return
-		}
-
-		// ------- ALT-CLICK -------
-
-		if(parameters["alt"]){
-			if(!isAI(usr))
-				AltClick(usr)
-			else
-				AIAltClick(usr)
-			return
-		}
-
-		// ------- CTRL-CLICK -------
-
-		if(parameters["ctrl"]){
-			if(!isAI(usr))
-				CtrlClick(usr)
-			else
-				AICtrlClick(usr)
-			return
-		}
-
-		// ------- MIDDLE-CLICK -------
-
-		if(parameters["middle"]){
-			if(!isAI(usr))
-				MiddleClick(usr)
-				return
-		}
-
-	// ------- THROW -------
-	if(usr.in_throw_mode)
-		return usr:throw_item(src)
-
-	// ------- ITEM IN HAND DEFINED -------
-	var/obj/item/W = usr.get_active_hand()
-/*	Now handled by get_active_hand()
-	// ------- ROBOT -------
-	if(istype(usr, /mob/living/silicon/robot))
-		if(!isnull(usr:module_active))
-			W = usr:module_active
-		else
-			W = null
-*/
-	// ------- ATTACK SELF -------
-	if (W == src && usr.stat == 0)
-		W.attack_self(usr)
-		if(usr.hand)
-			usr.update_inv_l_hand(0)	//update in-hand overlays
-		else
-			usr.update_inv_r_hand(0)
-		return
-
-	// ------- PARALYSIS, STUN, WEAKENED, DEAD, (And not AI) -------
-	if (((usr.paralysis || usr.stunned || usr.weakened) && !istype(usr, /mob/living/silicon/ai)) || usr.stat != 0)
-		return
-
-	// ------- CLICKING STUFF IN CONTAINERS -------
-	if ((!( src in usr.contents ) && (((!( isturf(src) ) && (!( isturf(src.loc) ) && (src.loc && !( isturf(src.loc.loc) )))) || !( isturf(usr.loc) )) && (src.loc != usr.loc && (!( istype(src, /obj/screen) ) && !( usr.contents.Find(src.loc) ))))))
-		if (istype(usr, /mob/living/silicon/ai))
-			var/mob/living/silicon/ai/ai = usr
-			if (ai.control_disabled || ai.malfhacking)
-				return
-		else
-			return
-
-	// ------- 1 TILE AWAY -------
-	var/t5
-	// ------- AI CAN CLICK ANYTHING -------
-	if(istype(usr, /mob/living/silicon/ai))
-		t5 = 1
-	// ------- CYBORG CAN CLICK ANYTHING WHEN NOT HOLDING STUFF -------
-	else if(istype(usr, /mob/living/silicon/robot) && !W)
-		t5 = 1
-	else
-		t5 = in_range(src, usr) || src.loc == usr
-
-//	world << "according to dblclick(), t5 is [t5]"
-
-	// ------- ACTUALLY DETERMINING STUFF -------
-	if (((t5 || (W && (W.flags & USEDELAY))) && !( istype(src, /obj/screen) )))
-
-		// ------- ( CAN USE ITEM OR HAS 1 SECOND USE DELAY ) AND NOT CLICKING ON SCREEN -------
-
-		if (usr.next_move < world.time)
-			usr.prev_move = usr.next_move
-			usr.next_move = world.time + 10
-		else
-			// ------- ALREADY USED ONE ITEM WITH USE DELAY IN THE PREVIOUS SECOND -------
-			return
-
-		// ------- DELAY CHECK PASSED -------
-
-		if ((src.loc && (get_dist(src, usr) < 2 || src.loc == usr.loc)))
-
-			// ------- CLICKED OBJECT EXISTS IN GAME WORLD, DISTANCE FROM PERSON TO OBJECT IS 1 SQUARE OR THEY'RE ON THE SAME SQUARE -------
-
-			var/direct = get_dir(usr, src)
-			var/obj/item/weapon/dummy/D = new /obj/item/weapon/dummy( usr.loc )
-			var/ok = 0
-			if ( (direct - 1) & direct)
-
-				// ------- CLICKED OBJECT IS LOCATED IN A DIAGONAL POSITION FROM THE PERSON -------
-
-				var/turf/Step_1
-				var/turf/Step_2
-				switch(direct)
-					if(5.0)
-						Step_1 = get_step(usr, NORTH)
-						Step_2 = get_step(usr, EAST)
-
-					if(6.0)
-						Step_1 = get_step(usr, SOUTH)
-						Step_2 = get_step(usr, EAST)
-
-					if(9.0)
-						Step_1 = get_step(usr, NORTH)
-						Step_2 = get_step(usr, WEST)
-
-					if(10.0)
-						Step_1 = get_step(usr, SOUTH)
-						Step_2 = get_step(usr, WEST)
-
-					else
-				if(Step_1 && Step_2)
-
-					// ------- BOTH CARDINAL DIRECTIONS OF THE DIAGONAL EXIST IN THE GAME WORLD -------
-
-					var/check_1 = 0
-					var/check_2 = 0
-					if(step_to(D, Step_1))
-						check_1 = 1
-						for(var/obj/border_obstacle in Step_1)
-							if(border_obstacle.flags & ON_BORDER)
-								if(!border_obstacle.CheckExit(D, src))
-									check_1 = 0
-									// ------- YOU TRIED TO CLICK ON AN ITEM THROUGH A WINDOW (OR SIMILAR THING THAT LIMITS ON BORDERS) ON ONE OF THE DIRECITON TILES -------
-						for(var/obj/border_obstacle in get_turf(src))
-							if((border_obstacle.flags & ON_BORDER) && (src != border_obstacle))
-								if(!border_obstacle.CanPass(D, D.loc, 1, 0))
-									// ------- YOU TRIED TO CLICK ON AN ITEM THROUGH A WINDOW (OR SIMILAR THING THAT LIMITS ON BORDERS) ON THE TILE YOU'RE ON -------
-									check_1 = 0
-
-					D.loc = usr.loc
-					if(step_to(D, Step_2))
-						check_2 = 1
-
-						for(var/obj/border_obstacle in Step_2)
-							if(border_obstacle.flags & ON_BORDER)
-								if(!border_obstacle.CheckExit(D, src))
-									check_2 = 0
-						for(var/obj/border_obstacle in get_turf(src))
-							if((border_obstacle.flags & ON_BORDER) && (src != border_obstacle))
-								if(!border_obstacle.CanPass(D, D.loc, 1, 0))
-									check_2 = 0
-
-
-					if(check_1 || check_2)
-						ok = 1
-						// ------- YOU CAN REACH THE ITEM THROUGH AT LEAST ONE OF THE TWO DIRECTIONS. GOOD. -------
-
-					/*
-						More info:
-							If you're trying to click an item in the north-east of your mob, the above section of code will first check if tehre's a tile to the north or you and to the east of you
-							These two tiles are Step_1 and Step_2. After this, a new dummy object is created on your location. It then tries to move to Step_1, If it succeeds, objects on the turf you're on and
-							the turf that Step_1 is are checked for items which have the ON_BORDER flag set. These are itmes which limit you on only one tile border. Windows, for the most part.
-							CheckExit() and CanPass() are use to determine this. The dummy object is then moved back to your location and it tries to move to Step_2. Same checks are performed here.
-							If at least one of the two checks succeeds, it means you can reach the item and ok is set to 1.
-					*/
-			else
-				// ------- OBJECT IS ON A CARDINAL TILE (NORTH, SOUTH, EAST OR WEST OR THE TILE YOU'RE ON) -------
-				if(loc == usr.loc)
-					ok = 1
-					// ------- OBJECT IS ON THE SAME TILE AS YOU -------
-				else
-					ok = 1
-
-					//Now, check objects to block exit that are on the border
-					for(var/obj/border_obstacle in usr.loc)
-						if(border_obstacle.flags & ON_BORDER)
-							if(!border_obstacle.CheckExit(D, src))
-								ok = 0
-
-					//Next, check objects to block entry that are on the border
-					for(var/obj/border_obstacle in get_turf(src))
-						if((border_obstacle.flags & ON_BORDER) && (src != border_obstacle))
-							if(!border_obstacle.CanPass(D, D.loc, 1, 0))
-								ok = 0
-				/*
-					See the previous More info, for... more info...
-				*/
-
-			//del(D)
-			// Garbage Collect Dummy
-			D.loc = null
-			D = null
-
-			// ------- DUMMY OBJECT'S SERVED IT'S PURPOSE, IT'S REWARDED WITH A SWIFT DELETE -------
-			if (!( ok ))
-				// ------- TESTS ABOVE DETERMINED YOU CANNOT REACH THE TILE -------
-				return 0
-
-		if (!( usr.restrained() || (usr.lying && usr.buckled!=src) ))
-			// ------- YOU ARE NOT REASTRAINED -------
-
-			if (W)
-				// ------- YOU HAVE AN ITEM IN YOUR HAND - HANDLE ATTACKBY AND AFTERATTACK -------
-				var/ignoreAA = 0 //Ignore afterattack(). Surgery uses this.
-				if (t5)
-					ignoreAA = src.attackby(W, usr)
-				if (W && !ignoreAA)
-					W.afterattack(src, usr, (t5 ? 1 : 0), params)
-
-			else
-				// ------- YOU DO NOT HAVE AN ITEM IN YOUR HAND -------
-				if (istype(usr, /mob/living/carbon/human))
-					// ------- YOU ARE HUMAN -------
-					src.attack_hand(usr, usr.hand)
-				else
-					// ------- YOU ARE NOT HUMAN. WHAT ARE YOU - DETERMINED HERE AND PROPER ATTACK_MOBTYPE CALLED -------
-					if (istype(usr, /mob/living/carbon/monkey))
-						src.attack_paw(usr, usr.hand)
-					else if (istype(usr, /mob/living/carbon/alien/humanoid))
-						if(usr.m_intent == "walk" && istype(usr, /mob/living/carbon/alien/humanoid/hunter))
-							usr.m_intent = "run"
-							usr.hud_used.move_intent.icon_state = "running"
-							usr.update_icons()
-						src.attack_alien(usr, usr.hand)
-					else if (istype(usr, /mob/living/carbon/alien/larva))
-						src.attack_larva(usr)
-					else if (istype(usr, /mob/living/silicon/ai) || istype(usr, /mob/living/silicon/robot))
-						src.attack_ai(usr, usr.hand)
-					else if(istype(usr, /mob/living/carbon/slime))
-						src.attack_slime(usr)
-					else if(istype(usr, /mob/living/simple_animal))
-						src.attack_animal(usr)
-		else
-			// ------- YOU ARE RESTRAINED. DETERMINE WHAT YOU ARE AND ATTACK WITH THE PROPER HAND_X PROC -------
-			if (istype(usr, /mob/living/carbon/human))
-				src.hand_h(usr, usr.hand)
-			else if (istype(usr, /mob/living/carbon/monkey))
-				src.hand_p(usr, usr.hand)
-			else if (istype(usr, /mob/living/carbon/alien/humanoid))
-				src.hand_al(usr, usr.hand)
-			else if (istype(usr, /mob/living/silicon/ai) || istype(usr, /mob/living/silicon/robot))
-				src.hand_a(usr, usr.hand)
-
-	else
-		// ------- ITEM INACESSIBLE OR CLICKING ON SCREEN -------
-		if (istype(src, /obj/screen))
-			// ------- IT'S THE HUD YOU'RE CLICKING ON -------
-			usr.prev_move = usr.next_move
-			usr:lastDblClick = world.time + 2
-			if (usr.next_move < world.time)
-				usr.next_move = world.time + 2
-			else
-				return
-
-			// ------- 2 DECISECOND DELAY FOR CLICKING PASSED -------
-
-			if (!( usr.restrained() ))
-
-				// ------- YOU ARE NOT RESTRAINED -------
-				if ((W && !( istype(src, /obj/screen) )))
-					// ------- IT SHOULD NEVER GET TO HERE, DUE TO THE ISTYPE(SRC, /OBJ/SCREEN) FROM PREVIOUS IF-S - I TESTED IT WITH A DEBUG OUTPUT AND I COULDN'T GET THIST TO SHOW UP. -------
-					src.attackby(W, usr)
-					if (W)
-						W.afterattack(src, usr,, params)
-				else
-					// ------- YOU ARE NOT RESTRAINED, AND ARE CLICKING A HUD OBJECT -------
-					if (istype(usr, /mob/living/carbon/human))
-						src.attack_hand(usr, usr.hand)
-					else if (istype(usr, /mob/living/carbon/monkey))
-						src.attack_paw(usr, usr.hand)
-					else if (istype(usr, /mob/living/carbon/alien/humanoid))
-						src.attack_alien(usr, usr.hand)
-			else
-				// ------- YOU ARE RESTRAINED CLICKING ON A HUD OBJECT -------
-				if (istype(usr, /mob/living/carbon/human))
-					src.hand_h(usr, usr.hand)
-				else if (istype(usr, /mob/living/carbon/monkey))
-					src.hand_p(usr, usr.hand)
-				else if (istype(usr, /mob/living/carbon/alien/humanoid))
-					src.hand_al(usr, usr.hand)
-		else
-			// ------- YOU ARE CLICKING ON AN OBJECT THAT'S INACCESSIBLE TO YOU AND IS NOT YOUR HUD -------
-			if((LASER in usr:mutations) && usr:a_intent == "harm" && world.time >= usr.next_move)
-				// ------- YOU HAVE THE LASER MUTATION, YOUR INTENT SET TO HURT AND IT'S BEEN MORE THAN A DECISECOND SINCE YOU LAS TATTACKED -------
-
-				var/turf/T = get_turf(usr)
-				var/turf/U = get_turf(src)
-
-
-				if(istype(usr, /mob/living/carbon/human))
-					usr:nutrition -= rand(1,5)
-					usr:handle_regular_hud_updates()
-
-				var/obj/item/projectile/beam/A = new /obj/item/projectile/beam( usr.loc )
-				A.icon = 'icons/effects/genetics.dmi'
-				A.icon_state = "eyelasers"
-				playsound(usr.loc, 'sound/weapons/taser2.ogg', 75, 1)
-
-				A.firer = usr
-				A.def_zone = usr:get_organ_target()
-				A.original = src
-				A.current = T
-				A.yo = U.y - T.y
-				A.xo = U.x - T.x
-				spawn( 1 )
-					A.process()
-
-				usr.next_move = world.time + 6
+///Called when gravity returns after floating I think
+/atom/proc/handle_fall()
 	return
 
-/atom/proc/ShiftClick(var/mob/M as mob)
-
-	if(istype(M.machine, /obj/machinery/computer/security)) //No examining by looking through cameras
-		return
-
-	//I dont think this was ever really a problem and it's only creating more bugs...
-//	if(( abs(src.x-M.x)<8 || abs(src.y-M.y)<8 ) && src.z == M.z ) //This should prevent non-observers to examine stuff from outside their view.
-	examine()
-
+///Respond to the singularity eating this atom
+/atom/proc/singularity_act()
 	return
 
-/atom/proc/AltClick()
+/**
+  * Respond to the singularity pulling on us
+  *
+  * Default behaviour is to send [COMSIG_ATOM_SING_PULL] and return
+  */
+/atom/proc/singularity_pull(obj/singularity/S, current_size)
+	SEND_SIGNAL(src, COMSIG_ATOM_SING_PULL, S, current_size)
 
-	/* // NOT UNTIL I FIGURE OUT A GOOD WAY TO DO THIS SHIT
-	if((HULK in usr.mutations) || (SUPRSTR in usr.augmentations))
-		if(!istype(src, /obj/item) && !istype(src, /mob) && !istype(src, /turf))
-			if(!usr.get_active_hand())
 
-				var/liftable = 0
-				for(var/x in liftable_structures)
-					if(findtext("[src.type]", "[x]"))
-						liftable = 1
-						break
+/**
+  * Respond to acid being used on our atom
+  *
+  * Default behaviour is to send [COMSIG_ATOM_ACID_ACT] and return
+  */
+/atom/proc/acid_act(acidpwr, acid_volume)
+	SEND_SIGNAL(src, COMSIG_ATOM_ACID_ACT, acidpwr, acid_volume)
 
-				if(liftable)
+/**
+  * Respond to an emag being used on our atom
+  *
+  * Default behaviour is to send [COMSIG_ATOM_EMAG_ACT] and return
+  */
+/atom/proc/emag_act(mob/user)
+	SEND_SIGNAL(src, COMSIG_ATOM_EMAG_ACT, user)
 
-					add_fingerprint(usr)
-					var/obj/item/weapon/grab/G = new /obj/item/weapon/grab(usr)
-					G.assailant = usr
-					usr.put_in_active_hand(G)
-					G.structure = src
-					G.synch()
+/**
+  * Respond to a radioactive wave hitting this atom
+  *
+  * Default behaviour is to send [COMSIG_ATOM_RAD_ACT] and return
+  */
+/atom/proc/rad_act(strength)
+	SEND_SIGNAL(src, COMSIG_ATOM_RAD_ACT, strength)
 
-					visible_message("\red [usr] has picked up [src]!")
+/**
+  * Respond to narsie eating our atom
+  *
+  * Default behaviour is to send [COMSIG_ATOM_NARSIE_ACT] and return
+  */
+/atom/proc/narsie_act()
+	SEND_SIGNAL(src, COMSIG_ATOM_NARSIE_ACT)
 
-					return
-				else
-					usr << "\red You can't pick this up!"
-	*/
 
+///Return the values you get when an RCD eats you?
+/atom/proc/rcd_vals(mob/user, obj/item/construction/rcd/the_rcd)
+	return FALSE
+
+
+/**
+  * Respond to an RCD acting on our item
+  *
+  * Default behaviour is to send [COMSIG_ATOM_RCD_ACT] and return FALSE
+  */
+/atom/proc/rcd_act(mob/user, obj/item/construction/rcd/the_rcd, passed_mode)
+	SEND_SIGNAL(src, COMSIG_ATOM_RCD_ACT, user, the_rcd, passed_mode)
+	return FALSE
+
+/**
+  * Implement the behaviour for when a user click drags a storage object to your atom
+  *
+  * This behaviour is usually to mass transfer, but this is no longer a used proc as it just
+  * calls the underyling /datum/component/storage dump act if a component exists
+  *
+  * TODO these should be purely component items that intercept the atom clicks higher in the
+  * call chain
+  */
+/atom/proc/storage_contents_dump_act(obj/item/storage/src_object, mob/user)
+	if(GetComponent(/datum/component/storage))
+		return component_storage_contents_dump_act(src_object, user)
+	return FALSE
+
+/**
+  * Implement the behaviour for when a user click drags another storage item to you
+  *
+  * In this case we get as many of the tiems from the target items compoent storage and then
+  * put everything into ourselves (or our storage component)
+  *
+  * TODO these should be purely component items that intercept the atom clicks higher in the
+  * call chain
+  */
+/atom/proc/component_storage_contents_dump_act(datum/component/storage/src_object, mob/user)
+	var/list/things = src_object.contents()
+	var/datum/progressbar/progress = new(user, things.len, src)
+	var/datum/component/storage/STR = GetComponent(/datum/component/storage)
+	while (do_after(user, 10, TRUE, src, FALSE, CALLBACK(STR, /datum/component/storage.proc/handle_mass_item_insertion, things, src_object, user, progress)))
+		stoplag(1)
+	qdel(progress)
+	to_chat(user, "<span class='notice'>You dump as much of [src_object.parent]'s contents [STR.insert_preposition]to [src] as you can.</span>")
+	STR.orient2hud(user)
+	src_object.orient2hud(user)
+	if(user.active_storage) //refresh the HUD to show the transfered contents
+		user.active_storage.close(user)
+		user.active_storage.show_to(user)
+	return TRUE
+
+///Get the best place to dump the items contained in the source storage item?
+/atom/proc/get_dumping_location(obj/item/storage/source,mob/user)
+	return null
+
+/**
+  * This proc is called when an atom in our contents has it's [Destroy][/atom/Destroy] called
+  *
+  * Default behaviour is to simply send [COMSIG_ATOM_CONTENTS_DEL]
+  */
+/atom/proc/handle_atom_del(atom/A)
+	SEND_SIGNAL(src, COMSIG_ATOM_CONTENTS_DEL, A)
+
+/**
+  * called when the turf the atom resides on is ChangeTurfed
+  *
+  * Default behaviour is to loop through atom contents and call their HandleTurfChange() proc
+  */
+/atom/proc/HandleTurfChange(turf/T)
+	for(var/a in src)
+		var/atom/A = a
+		A.HandleTurfChange(T)
+
+/**
+  * the vision impairment to give to the mob whose perspective is set to that atom
+  *
+  * (e.g. an unfocused camera giving you an impaired vision when looking through it)
+  */
+/atom/proc/get_remote_view_fullscreens(mob/user)
 	return
 
-/atom/proc/CtrlClick()
-	if(hascall(src,"pull"))
-		src:pull()
+/**
+  * the sight changes to give to the mob whose perspective is set to that atom
+  *
+  * (e.g. A mob with nightvision loses its nightvision while looking through a normal camera)
+  */
+/atom/proc/update_remote_sight(mob/living/user)
 	return
 
-/atom/proc/AIShiftClick() // Opens and closes doors!
-	if(istype(src , /obj/machinery/door/airlock))
-		if(src:density)
-			var/nhref = "src=\ref[src];aiEnable=7"
-			src.Topic(nhref, params2list(nhref), src, 1)
-		else
-			var/nhref = "src=\ref[src];aiDisable=7"
-			src.Topic(nhref, params2list(nhref), src, 1)
 
+/**
+  * Hook for running code when a dir change occurs
+  *
+  * Not recommended to use, listen for the [COMSIG_ATOM_DIR_CHANGE] signal instead (sent by this proc)
+  */
+/atom/proc/setDir(newdir)
+	SHOULD_CALL_PARENT(TRUE)
+	SEND_SIGNAL(src, COMSIG_ATOM_DIR_CHANGE, dir, newdir)
+	dir = newdir
+
+///Handle melee attack by a mech
+/atom/proc/mech_melee_attack(obj/mecha/M)
 	return
 
-/atom/proc/AIAltClick() // Eletrifies doors.
-	if(istype(src , /obj/machinery/door/airlock))
-		if(!src:secondsElectrified)
-			var/nhref = "src=\ref[src];aiEnable=6"
-			src.Topic(nhref, params2list(nhref), src, 1)
-		else
-			var/nhref = "src=\ref[src];aiDisable=5"
-			src.Topic(nhref, params2list(nhref), src, 1)
+/**
+  * Called when the atom log's in or out
+  *
+  * Default behaviour is to call on_log on the location this atom is in
+  */
+/atom/proc/on_log(login)
+	if(loc)
+		loc.on_log(login)
 
-
-	return
-
-/atom/proc/AICtrlClick() // Bolts doors, turns off APCs.
-	if(istype(src , /obj/machinery/door/airlock))
-		if(src:locked)
-			var/nhref = "src=\ref[src];aiEnable=4"
-			src.Topic(nhref, params2list(nhref), src, 1)
-		else
-			var/nhref = "src=\ref[src];aiDisable=4"
-			src.Topic(nhref, params2list(nhref), src, 1)
-
-	else if (istype(src , /obj/machinery/power/apc/))
-		var/nhref = "src=\ref[src];breaker=1"
-		src.Topic(nhref, params2list(nhref), 0)
-
-
-
-	return
-
-/atom/proc/MiddleClick(var/mob/M as mob) // switch hands
-	if(istype(M, /mob/living/carbon))
-		var/mob/living/carbon/U = M
-		U.swap_hand()
-
-
-/atom/proc/get_global_map_pos()
-	if(!islist(global_map) || isemptylist(global_map)) return
-	var/cur_x = null
-	var/cur_y = null
-	var/list/y_arr = null
-	for(cur_x=1,cur_x<=global_map.len,cur_x++)
-		y_arr = global_map[cur_x]
-		cur_y = y_arr.Find(src.z)
-		if(cur_y)
-			break
-//	world << "X = [cur_x]; Y = [cur_y]"
-	if(cur_x && cur_y)
-		return list("x"=cur_x,"y"=cur_y)
-	else
-		return 0
-
-/atom/proc/checkpass(passflag)
-	return pass_flags&passflag
 
 /*
-/client/verb/check_dummy()
-	set name = "List Dummies"
-	set category = "Debug"
-
-	var/list/dummies = list()
-	for(var/obj/item/weapon/dummy/D in world)
-		usr << "[D] - [D.x], [D.y], [D.z] - [D.loc]"
-		dummies += D
-	usr << "[dummies.len] found!"
+	Atom Colour Priority System
+	A System that gives finer control over which atom colour to colour the atom with.
+	The "highest priority" one is always displayed as opposed to the default of
+	"whichever was set last is displayed"
 */
 
+
+///Adds an instance of colour_type to the atom's atom_colours list
+/atom/proc/add_atom_colour(coloration, colour_priority)
+	if(!atom_colours || !atom_colours.len)
+		atom_colours = list()
+		atom_colours.len = COLOUR_PRIORITY_AMOUNT //four priority levels currently.
+	if(!coloration)
+		return
+	if(colour_priority > atom_colours.len)
+		return
+	atom_colours[colour_priority] = coloration
+	update_atom_colour()
+
+
+///Removes an instance of colour_type from the atom's atom_colours list
+/atom/proc/remove_atom_colour(colour_priority, coloration)
+	if(!atom_colours)
+		atom_colours = list()
+		atom_colours.len = COLOUR_PRIORITY_AMOUNT //four priority levels currently.
+	if(colour_priority > atom_colours.len)
+		return
+	if(coloration && atom_colours[colour_priority] != coloration)
+		return //if we don't have the expected color (for a specific priority) to remove, do nothing
+	atom_colours[colour_priority] = null
+	update_atom_colour()
+
+
+///Resets the atom's color to null, and then sets it to the highest priority colour available
+/atom/proc/update_atom_colour()
+	if(!atom_colours)
+		atom_colours = list()
+		atom_colours.len = COLOUR_PRIORITY_AMOUNT //four priority levels currently.
+	color = null
+	for(var/C in atom_colours)
+		if(islist(C))
+			var/list/L = C
+			if(L.len)
+				color = L
+				return
+		else if(C)
+			color = C
+			return
+
+
+///Proc for being washed by a shower
+/atom/proc/washed(var/atom/washer)
+	. = SEND_SIGNAL(src, COMSIG_COMPONENT_CLEAN_ACT, CLEAN_WEAK)
+	remove_atom_colour(WASHABLE_COLOUR_PRIORITY)
+
+	var/datum/component/radioactive/healthy_green_glow = GetComponent(/datum/component/radioactive)
+	if(!healthy_green_glow || QDELETED(healthy_green_glow))
+		return
+	var/strength = healthy_green_glow.strength
+	if(strength <= RAD_BACKGROUND_RADIATION)
+		qdel(healthy_green_glow)
+		return
+	healthy_green_glow.strength -= max(0, (healthy_green_glow.strength - (RAD_BACKGROUND_RADIATION * 2)) * 0.2)
+
+
+/**
+  * call back when a var is edited on this atom
+  *
+  * Can be used to implement special handling of vars
+  *
+  * At the atom level, if you edit a var named "color" it will add the atom colour with
+  * admin level priority to the atom colours list
+  *
+  * Also, if GLOB.Debug2 is FALSE, it sets the [ADMIN_SPAWNED_1] flag on [flags_1][/atom/var/flags_1], which signifies
+  * the object has been admin edited
+  */
+/atom/vv_edit_var(var_name, var_value)
+	if(!GLOB.Debug2)
+		flags_1 |= ADMIN_SPAWNED_1
+	. = ..()
+	switch(var_name)
+		if("color")
+			add_atom_colour(color, ADMIN_COLOUR_PRIORITY)
+
+/**
+  * Return the markup to for the dropdown list for the VV panel for this atom
+  *
+  * Override in subtypes to add custom VV handling in the VV panel
+  */
+/atom/vv_get_dropdown()
+	. = ..()
+	VV_DROPDOWN_OPTION("", "---------")
+	if(!ismovable(src))
+		var/turf/curturf = get_turf(src)
+		if(curturf)
+			. += "<option value='?_src_=holder;[HrefToken()];adminplayerobservecoodjump=1;X=[curturf.x];Y=[curturf.y];Z=[curturf.z]'>Jump To</option>"
+	VV_DROPDOWN_OPTION(VV_HK_MODIFY_TRANSFORM, "Modify Transform")
+	VV_DROPDOWN_OPTION(VV_HK_ADD_REAGENT, "Add Reagent")
+	VV_DROPDOWN_OPTION(VV_HK_TRIGGER_EMP, "EMP Pulse")
+	VV_DROPDOWN_OPTION(VV_HK_TRIGGER_EXPLOSION, "Explosion")
+
+/atom/vv_do_topic(list/href_list)
+	. = ..()
+	if(href_list[VV_HK_ADD_REAGENT] && check_rights(R_VAREDIT))
+		if(!reagents)
+			var/amount = input(usr, "Specify the reagent size of [src]", "Set Reagent Size", 50) as num|null
+			if(amount)
+				create_reagents(amount)
+
+		if(reagents)
+			var/chosen_id
+			switch(alert(usr, "Choose a method.", "Add Reagents", "Search", "Choose from a list", "I'm feeling lucky"))
+				if("Search")
+					var/valid_id
+					while(!valid_id)
+						chosen_id = input(usr, "Enter the ID of the reagent you want to add.", "Search reagents") as null|text
+						if(isnull(chosen_id)) //Get me out of here!
+							break
+						if (!ispath(text2path(chosen_id)))
+							chosen_id = pick_closest_path(chosen_id, make_types_fancy(subtypesof(/datum/reagent)))
+							if (ispath(chosen_id))
+								valid_id = TRUE
+						else
+							valid_id = TRUE
+						if(!valid_id)
+							to_chat(usr, "<span class='warning'>A reagent with that ID doesn't exist!</span>")
+				if("Choose from a list")
+					chosen_id = input(usr, "Choose a reagent to add.", "Choose a reagent.") as null|anything in sortList(subtypesof(/datum/reagent), /proc/cmp_typepaths_asc)
+				if("I'm feeling lucky")
+					chosen_id = pick(subtypesof(/datum/reagent))
+			if(chosen_id)
+				var/amount = input(usr, "Choose the amount to add.", "Choose the amount.", reagents.maximum_volume) as num|null
+				if(amount)
+					reagents.add_reagent(chosen_id, amount)
+					log_admin("[key_name(usr)] has added [amount] units of [chosen_id] to [src]")
+					message_admins("<span class='notice'>[key_name(usr)] has added [amount] units of [chosen_id] to [src]</span>")
+	if(href_list[VV_HK_TRIGGER_EXPLOSION] && check_rights(R_FUN))
+		usr.client.cmd_admin_explosion(src)
+	if(href_list[VV_HK_TRIGGER_EMP] && check_rights(R_FUN))
+		usr.client.cmd_admin_emp(src)
+	if(href_list[VV_HK_MODIFY_TRANSFORM] && check_rights(R_VAREDIT))
+		var/result = input(usr, "Choose the transformation to apply","Transform Mod") as null|anything in list("Scale","Translate","Rotate")
+		var/matrix/M = transform
+		switch(result)
+			if("Scale")
+				var/x = input(usr, "Choose x mod","Transform Mod") as null|num
+				var/y = input(usr, "Choose y mod","Transform Mod") as null|num
+				if(!isnull(x) && !isnull(y))
+					transform = M.Scale(x,y)
+			if("Translate")
+				var/x = input(usr, "Choose x mod","Transform Mod") as null|num
+				var/y = input(usr, "Choose y mod","Transform Mod") as null|num
+				if(!isnull(x) && !isnull(y))
+					transform = M.Translate(x,y)
+			if("Rotate")
+				var/angle = input(usr, "Choose angle to rotate","Transform Mod") as null|num
+				if(!isnull(angle))
+					transform = M.Turn(angle)
+	if(href_list[VV_HK_AUTO_RENAME] && check_rights(R_VAREDIT))
+		var/newname = input(usr, "What do you want to rename this to?", "Automatic Rename") as null|text
+		if(newname)
+			vv_auto_rename(newname)
+
+/atom/vv_get_header()
+	. = ..()
+	var/refid = REF(src)
+	. += "[VV_HREF_TARGETREF(refid, VV_HK_AUTO_RENAME, "<b id='name'>[src]</b>")]"
+	. += "<br><font size='1'><a href='?_src_=vars;[HrefToken()];rotatedatum=[refid];rotatedir=left'><<</a> <a href='?_src_=vars;[HrefToken()];datumedit=[refid];varnameedit=dir' id='dir'>[dir2text(dir) || dir]</a> <a href='?_src_=vars;[HrefToken()];rotatedatum=[refid];rotatedir=right'>>></a></font>"
+
+///Where atoms should drop if taken from this atom
+/atom/proc/drop_location()
+	var/atom/L = loc
+	if(!L)
+		return null
+	return L.AllowDrop() ? L : L.drop_location()
+
+/atom/proc/vv_auto_rename(newname)
+	name = newname
+
+/**
+  * An atom has entered this atom's contents
+  *
+  * Default behaviour is to send the [COMSIG_ATOM_ENTERED]
+  */
+/atom/Entered(atom/movable/AM, atom/oldLoc)
+	SEND_SIGNAL(src, COMSIG_ATOM_ENTERED, AM, oldLoc)
+
+/**
+  * An atom is attempting to exit this atom's contents
+  *
+  * Default behaviour is to send the [COMSIG_ATOM_EXIT]
+  *
+  * Return value should be set to FALSE if the moving atom is unable to leave,
+  * otherwise leave value the result of the parent call
+  */
+/atom/Exit(atom/movable/AM, atom/newLoc)
+	. = ..()
+	if(SEND_SIGNAL(src, COMSIG_ATOM_EXIT, AM, newLoc) & COMPONENT_ATOM_BLOCK_EXIT)
+		return FALSE
+
+/**
+  * An atom has exited this atom's contents
+  *
+  * Default behaviour is to send the [COMSIG_ATOM_EXITED]
+  */
+/atom/Exited(atom/movable/AM, atom/newLoc)
+	SEND_SIGNAL(src, COMSIG_ATOM_EXITED, AM, newLoc)
+
+///Return atom temperature
+/atom/proc/return_temperature()
+	return
+
+/**
+  *Tool behavior procedure. Redirects to tool-specific procs by default.
+  *
+  * You can override it to catch all tool interactions, for use in complex deconstruction procs.
+  *
+  * Must return  parent proc ..() in the end if overridden
+  */
+/atom/proc/tool_act(mob/living/user, obj/item/I, tool_type)
+	switch(tool_type)
+		if(TOOL_CROWBAR)
+			. |= crowbar_act(user, I)
+		if(TOOL_MULTITOOL)
+			. |= multitool_act(user, I)
+		if(TOOL_SCREWDRIVER)
+			. |= screwdriver_act(user, I)
+		if(TOOL_WRENCH)
+			. |= wrench_act(user, I)
+		if(TOOL_WIRECUTTER)
+			. |= wirecutter_act(user, I)
+		if(TOOL_WELDER)
+			. |= welder_act(user, I)
+		if(TOOL_ANALYZER)
+			. |= analyzer_act(user, I)
+	if(. & COMPONENT_BLOCK_TOOL_ATTACK)
+		return TRUE
+
+//! Tool-specific behavior procs. They send signals, so try to call ..()
+///
+
+///Crowbar act
+/atom/proc/crowbar_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_CROWBAR_ACT, user, I)
+
+///Multitool act
+/atom/proc/multitool_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_MULTITOOL_ACT, user, I)
+
+///Check if the multitool has an item in it's data buffer
+/atom/proc/multitool_check_buffer(user, obj/item/I, silent = FALSE)
+	if(!istype(I, /obj/item/multitool))
+		if(user && !silent)
+			to_chat(user, "<span class='warning'>[I] has no data buffer!</span>")
+		return FALSE
+	return TRUE
+
+///Screwdriver act
+/atom/proc/screwdriver_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_SCREWDRIVER_ACT, user, I)
+
+///Wrench act
+/atom/proc/wrench_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_WRENCH_ACT, user, I)
+
+///Wirecutter act
+/atom/proc/wirecutter_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_WIRECUTTER_ACT, user, I)
+
+///Welder act
+/atom/proc/welder_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_WELDER_ACT, user, I)
+
+///Analyzer act
+/atom/proc/analyzer_act(mob/living/user, obj/item/I)
+	return SEND_SIGNAL(src, COMSIG_ATOM_ANALYSER_ACT, user, I)
+
+///Generate a tag for this atom
+/atom/proc/GenerateTag()
+	return
+
+///Connect this atom to a shuttle
+/atom/proc/connect_to_shuttle(obj/docking_port/mobile/port, obj/docking_port/stationary/dock, idnum, override=FALSE)
+	return
+
+/// Generic logging helper
+/atom/proc/log_message(message, message_type, color=null, log_globally=TRUE)
+	if(!log_globally)
+		return
+
+	var/log_text = "[key_name(src)] [message] [loc_name(src)]"
+	switch(message_type)
+		if(LOG_ATTACK)
+			log_attack(log_text)
+		if(LOG_SAY)
+			log_say(log_text)
+		if(LOG_WHISPER)
+			log_whisper(log_text)
+		if(LOG_EMOTE)
+			log_emote(log_text)
+		if(LOG_DSAY)
+			log_dsay(log_text)
+		if(LOG_PDA)
+			log_pda(log_text)
+		if(LOG_CHAT)
+			log_chat(log_text)
+		if(LOG_COMMENT)
+			log_comment(log_text)
+		if(LOG_TELECOMMS)
+			log_telecomms(log_text)
+		if(LOG_OOC)
+			log_ooc(log_text)
+		if(LOG_ADMIN)
+			log_admin(log_text)
+		if(LOG_ADMIN_PRIVATE)
+			log_admin_private(log_text)
+		if(LOG_ASAY)
+			log_adminsay(log_text)
+		if(LOG_OWNERSHIP)
+			log_game(log_text)
+		if(LOG_GAME)
+			log_game(log_text)
+		if(LOG_MECHA)
+			log_mecha(log_text)
+		if(LOG_SHUTTLE)
+			log_shuttle(log_text)
+		else
+			stack_trace("Invalid individual logging type: [message_type]. Defaulting to [LOG_GAME] (LOG_GAME).")
+			log_game(log_text)
+
+/// Helper for logging chat messages or other logs with arbitrary inputs (e.g. announcements)
+/atom/proc/log_talk(message, message_type, tag=null, log_globally=TRUE, forced_by=null)
+	var/prefix = tag ? "([tag]) " : ""
+	var/suffix = forced_by ? " FORCED by [forced_by]" : ""
+	log_message("[prefix]\"[message]\"[suffix]", message_type, log_globally=log_globally)
+
+/// Helper for logging of messages with only one sender and receiver
+/proc/log_directed_talk(atom/source, atom/target, message, message_type, tag)
+	if(!tag)
+		stack_trace("Unspecified tag for private message")
+		tag = "UNKNOWN"
+
+	source.log_talk(message, message_type, tag="[tag] to [key_name(target)]")
+	if(source != target)
+		target.log_talk(message, message_type, tag="[tag] from [key_name(source)]", log_globally=FALSE)
+
+/**
+  * Log a combat message in the attack log
+  *
+  * Arguments:
+  * * atom/user - argument is the actor performing the action
+  * * atom/target - argument is the target of the action
+  * * what_done - is a verb describing the action (e.g. punched, throwed, kicked, etc.)
+  * * atom/object - is a tool with which the action was made (usually an item)
+  * * addition - is any additional text, which will be appended to the rest of the log line
+  */
+/proc/log_combat(atom/user, atom/target, what_done, atom/object=null, addition=null)
+	var/ssource = key_name(user)
+	var/starget = key_name(target)
+
+	var/mob/living/living_target = target
+	var/hp = istype(living_target) ? " (NEWHP: [living_target.health]) " : ""
+
+	var/sobject = ""
+	if(object)
+		sobject = " with [object]"
+	var/saddition = ""
+	if(addition)
+		saddition = " [addition]"
+
+	var/postfix = "[sobject][saddition][hp]"
+
+	var/message = "has [what_done] [starget][postfix]"
+	user.log_message(message, LOG_ATTACK, color="red")
+
+	if(user != target)
+		var/reverse_message = "has been [what_done] by [ssource][postfix]"
+		target.log_message(reverse_message, LOG_ATTACK, color="orange", log_globally=FALSE)
+
+/atom/movable/proc/add_filter(name,priority,list/params)
+	LAZYINITLIST(filter_data)
+	var/list/p = params.Copy()
+	p["priority"] = priority
+	filter_data[name] = p
+	update_filters()
+
+/atom/movable/proc/update_filters()
+	filters = null
+	filter_data = sortTim(filter_data, /proc/cmp_filter_data_priority, TRUE)
+	for(var/f in filter_data)
+		var/list/data = filter_data[f]
+		var/list/arguments = data.Copy()
+		arguments -= "priority"
+		filters += filter(arglist(arguments))
+
+/atom/movable/proc/get_filter(name)
+	if(filter_data && filter_data[name])
+		return filters[filter_data.Find(name)]
+
+/atom/proc/intercept_zImpact(atom/movable/AM, levels = 1)
+	. |= SEND_SIGNAL(src, COMSIG_ATOM_INTERCEPT_Z_FALL, AM, levels)
+
+///Sets the custom materials for an item.
+/atom/proc/set_custom_materials(list/materials, multiplier = 1)
+
+	if(!materials)
+		materials = custom_materials
+
+	if(custom_materials) //Only runs if custom materials existed at first. Should usually be the case but check anyways
+		for(var/i in custom_materials)
+			var/datum/material/custom_material = SSmaterials.GetMaterialRef(i)
+			custom_material.on_removed(src, material_flags) //Remove the current materials
+
+	if(!length(materials))
+		return
+
+	custom_materials = list() //Reset the list
+
+	for(var/x in materials)
+		var/datum/material/custom_material = SSmaterials.GetMaterialRef(x)
+
+		if(!(material_flags & MATERIAL_NO_EFFECTS))
+			custom_material.on_applied(src, materials[custom_material] * multiplier * material_modifier, material_flags)
+		custom_materials[custom_material] += materials[x] * multiplier
+
+/**
+  * Returns true if this atom has gravity for the passed in turf
+  *
+  * Sends signals [COMSIG_ATOM_HAS_GRAVITY] and [COMSIG_TURF_HAS_GRAVITY], both can force gravity with
+  * the forced gravity var
+  *
+  * Gravity situations:
+  * * No gravity if you're not in a turf
+  * * No gravity if this atom is in is a space turf
+  * * Gravity if the area it's in always has gravity
+  * * Gravity if there's a gravity generator on the z level
+  * * Gravity if the Z level has an SSMappingTrait for ZTRAIT_GRAVITY
+  * * otherwise no gravity
+  */
+/atom/proc/has_gravity(turf/T)
+	if(!T || !isturf(T))
+		T = get_turf(src)
+
+	if(!T)
+		return 0
+
+	var/list/forced_gravity = list()
+	SEND_SIGNAL(src, COMSIG_ATOM_HAS_GRAVITY, T, forced_gravity)
+	if(!forced_gravity.len)
+		SEND_SIGNAL(T, COMSIG_TURF_HAS_GRAVITY, src, forced_gravity)
+	if(forced_gravity.len)
+		var/max_grav
+		for(var/i in forced_gravity)
+			max_grav = max(max_grav, i)
+		return max_grav
+
+	if(isspaceturf(T)) // Turf never has gravity
+		return FALSE
+	if(istype(T, /turf/open/openspace)) //openspace in a space area doesn't get gravity
+		if(istype(get_area(T), /area/space))
+			return FALSE
+
+	var/area/A = get_area(T)
+	if(A.has_gravity) // Areas which always has gravity
+		return A.has_gravity
+	else
+		// There's a gravity generator on our z level
+		if(GLOB.gravity_generators["[T.z]"])
+			var/max_grav = 0
+			for(var/obj/machinery/gravity_generator/main/G in GLOB.gravity_generators["[T.z]"])
+				max_grav = max(G.setting,max_grav)
+			return max_grav
+	return SSmapping.level_trait(T.z, ZTRAIT_GRAVITY)
